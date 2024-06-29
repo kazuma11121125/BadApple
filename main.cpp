@@ -51,7 +51,7 @@ int main() {
         return -1;
     }
     std::string commands = "ffmpeg -y -i "+FILENAME+" -vn output.ogg";
-    system(commands.c_str());
+    std::thread t1(system, commands.c_str());
     std::vector<std::string> frames;
     int frame_count = vidObj.get(cv::CAP_PROP_FRAME_COUNT);
     std::cout << "Frame count: " << frame_count << std::endl;
@@ -63,12 +63,12 @@ int main() {
         std::cout << "Frame " << i << " Completed" << std::endl;
     }
     int i = 0;
+    t1.join();
     std::cout << "All set...Press Enter to start the video" << std::endl;
     float fps = vidObj.get(cv::CAP_PROP_FPS);
     std::cout << "FPS: " << fps << std::endl;
     std::cin.get();
-    std::thread t1(system,"canberra-gtk-play -f output.ogg");
-    t1.detach();
+    std::thread t2(system,"canberra-gtk-play -f output.ogg");
     while (i < frames.size()) {
         system("clear");
         std::cout << frames[i] << std::endl;
@@ -76,5 +76,6 @@ int main() {
         usleep(1000000 / fps);
     }
     std::cout << "Video completed" << std::endl;
+    t2.detach();
     return 0;
 }
