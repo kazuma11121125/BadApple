@@ -2,11 +2,19 @@
 動画を文字で再生するものです。C++ OpenCVを利用しています。  
 Ubuntu環境で作成  
   
-## インストールするもの  
-sudo apt install build-essential    
-sudo apt install cmake  
+## インストールするもの
+```  
+sudo apt install build-essential
+```   
+```  
+sudo apt install cmake
+```  
+```  
 sudo apt-get install ninja-build  
+```  
+```  
 sudo apt install libopencv-dev  
+```  
 
 ### セットアップ
 Mp4動画をセットする。framesのフォルダを作成。sh cmake.shでビルドを行い、sh run.shで実行する。  
