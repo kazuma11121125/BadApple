@@ -24,5 +24,5 @@ const int WIDTH = 100;// 12行目 再生サイズの調整
 
 cv::VideoCapture vidObj("bad_apple.mp4");// 49行目 動画ファイル名をセット
 
-usleep(130000);101行目 //フレーム間隔を調整
+usleep(130000);//101行目 フレーム間隔を調整
 ```
