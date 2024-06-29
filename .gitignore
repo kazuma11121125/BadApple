@@ -1,3 +1,9 @@
 build
 frames
 *.mp4
+.vscode
+*.webm
+video
+play
+*.ogg
+*.py

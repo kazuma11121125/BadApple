@@ -15,14 +15,13 @@ sudo apt-get install ninja-build
 ```  
 sudo apt install libopencv-dev  
 ```  
-
+```  
+sudo apt install ffmpeg
+```  
+  
 ### セットアップ
-Mp4動画をセットする。framesのフォルダを作成。sh cmake.shでビルドを行い、sh run.shで実行する。  
+Mp4動画をセットし、動画ファイル名を必要に応じて変更する。sh cmake.shでビルドを行い、sh run.shで実行する。  
 ```c
-const int CLIP_FRAMES = 6571;// 10行目 動画のフレーム数を入力
-const int WIDTH = 100;// 12行目 再生サイズの調整
-
-cv::VideoCapture vidObj("bad_apple.mp4");// 49行目 動画ファイル名をセット
-
-usleep(130000);//101行目 フレーム間隔を調整
+const int HEIGHT = 40; // 10行目 描画高さの調整。
+const std::string FILENAME = "bad_apple.mp4"; // 11行目 動画ファイル名
 ```

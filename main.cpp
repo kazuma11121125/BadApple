@@ -1,21 +1,20 @@
 #include <iostream>
 #include <vector>
 #include <string>
-#include <opencv2/opencv.hpp>
-#include <sys/stat.h>
 #include <unistd.h>
-#include <ctime>
-#include <cmath>
+#include <ctime>    
+#include <opencv2/opencv.hpp>
+#include <thread>
 
-const int CLIP_FRAMES = 6571;// 6571 frames in total
-const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};// ASCII characters
-const int WIDTH = 100;// 100 columns
+const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
+const int HEIGHT = 40;
+const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
-cv::Mat resize(const cv::Mat& image, int new_width = WIDTH) {
+cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
-    float aspect_ratio = static_cast<float>(old_height) / static_cast<float>(old_width);
-    int new_height = static_cast<int>((aspect_ratio * new_width) / 2);
+    float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 2);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
@@ -39,67 +38,43 @@ std::string modify(const cv::Mat& image, int buckets = 25) {
     return new_pixels;
 }
 
-std::string doProcess(const cv::Mat& image, int new_width = WIDTH) {
-    cv::Mat resized_image = resize(image, new_width);
+std::string doProcess(const cv::Mat& image) {
+    cv::Mat resized_image = resize(image, HEIGHT);
     cv::Mat gray_image = grayscalify(resized_image);
     return modify(gray_image);
 }
 
-void framecapture() {
-    cv::VideoCapture vidObj("bad_apple.mp4");
-    int count = 0;
-    cv::Mat image;
-    while (true) {
-        bool success = vidObj.read(image);
-        if (!success) break;
-        cv::imwrite("frames/frame" + std::to_string(count) + ".jpg", image);
-        count++;
-    }
-}
-
-bool fileExists(const std::string& path) {
-    struct stat buffer;
-    return (stat(path.c_str(), &buffer) == 0);
-}
-
-std::string runner(const std::string& path) {
-    if (!fileExists(path)) {
-        std::cout << "Start frame capture." << std::endl;
-        framecapture();
-    } else {
-        std::cout << "Image found in " << path << "." << std::endl;
-        cv::Mat image = cv::imread(path);
-        if (image.empty()) {
-            std::cout << "Image not found in " << path << "." << std::endl;
-            return "";
-        }
-        return doProcess(image);
-    }
-    return "";
-}
-
 int main() {
-    std::vector<std::string> frames;
-
-    for (int i = 0; i <= CLIP_FRAMES / 4; ++i) {
-        try {
-            std::string path = "frames/frame" + std::to_string(i * 4) + ".jpg";
-            std::string frame = runner(path);
-            if (!frame.empty()) frames.push_back(frame);
-        } catch (...) {
-            // Exception handling
-        }
+    cv::VideoCapture vidObj(FILENAME);
+    if (!vidObj.isOpened()) {
+        std::cerr << "error: Not open file" << std::endl;
+        return -1;
     }
-
+    std::string commands = "ffmpeg -y -i "+FILENAME+" -vn output.ogg";
+    system(commands.c_str());
+    std::vector<std::string> frames;
+    int frame_count = vidObj.get(cv::CAP_PROP_FRAME_COUNT);
+    std::cout << "Frame count: " << frame_count << std::endl;
+    cv::Mat image;
+    for (int i = 0; i < frame_count; ++i) {
+        if (!vidObj.read(image)) break;
+        std::string frame = doProcess(image);
+        if (!frame.empty()) frames.push_back(frame);
+        std::cout << "Frame " << i << " Completed" << std::endl;
+    }
     int i = 0;
-
-    while (i < frames.size() - 1)
-    {
+    std::cout << "All set...Press Enter to start the video" << std::endl;
+    float fps = vidObj.get(cv::CAP_PROP_FPS);
+    std::cout << "FPS: " << fps << std::endl;
+    std::cin.get();
+    std::thread t1(system,"canberra-gtk-play -f output.ogg");
+    t1.detach();
+    while (i < frames.size()) {
         system("clear");
         std::cout << frames[i] << std::endl;
         i++;
-        usleep(130000);// 130000 microseconds = 0.13 seconds per frame (approximately) 
-
+        usleep(1000000 / fps);
     }
+    std::cout << "Video completed" << std::endl;
     return 0;
 }
