@@ -17,7 +17,10 @@ sudo apt install libopencv-dev
 ```  
 ```  
 sudo apt install ffmpeg
+```
 ```  
+sudo apt-get install libsfml-dev
+```    
   
 ### セットアップ
 Mp4動画をセットし、動画ファイル名を必要に応じて変更する。sh cmake.shでビルドを行い、sh run.shで実行する。  
