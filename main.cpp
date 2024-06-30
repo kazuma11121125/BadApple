@@ -2,13 +2,16 @@
 #include <vector>
 #include <string>
 #include <unistd.h>
-#include <ctime>    
+#include <ctime>
 #include <opencv2/opencv.hpp>
+#include <SFML/Audio.hpp>
 #include <thread>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
 const int HEIGHT = 40;
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+const float volume = 50.0f;
+const float speed = 0.970f;
+const std::string FILENAME = "aaa.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -50,32 +53,47 @@ int main() {
         std::cerr << "error: Not open file" << std::endl;
         return -1;
     }
-    std::string commands = "ffmpeg -y -i "+FILENAME+" -vn output.ogg";
-    std::thread t1(system, commands.c_str());
+    
+    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.ogg";
+    std::thread t([&commands](){
+        system(commands.c_str());
+    });
+    
     std::vector<std::string> frames;
-    int frame_count = vidObj.get(cv::CAP_PROP_FRAME_COUNT);
+    int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     std::cout << "Frame count: " << frame_count << std::endl;
     cv::Mat image;
+    
     for (int i = 0; i < frame_count; ++i) {
         if (!vidObj.read(image)) break;
         std::string frame = doProcess(image);
         if (!frame.empty()) frames.push_back(frame);
         std::cout << "Frame " << i << " Completed" << std::endl;
     }
-    int i = 0;
-    t1.join();
-    std::cout << "All set...Press Enter to start the video" << std::endl;
+    t.join();
     float fps = vidObj.get(cv::CAP_PROP_FPS);
     std::cout << "FPS: " << fps << std::endl;
+    sf::Music music;
+    if (!music.openFromFile("output.ogg")) {
+        std::cerr << "Error loading audio file" << std::endl;
+        return -1;
+    }
+    music.setPitch(speed);
+    std::cout << "All set...Press Enter to start the video" << std::endl;
     std::cin.get();
-    std::thread t2(system,"canberra-gtk-play -f output.ogg");
-    while (i < frames.size()) {
+    music.setVolume(volume);
+    music.play();
+    int i = 0;
+    for (const auto& frame : frames) {
         system("clear");
-        std::cout << frames[i] << std::endl;
+        std::cout << "フレーム数: " << i << std::endl;
+        std::cout << frame << std::endl;
         i++;
         usleep(1000000 / fps);
     }
+    
     std::cout << "Video completed" << std::endl;
-    t2.detach();
+    music.stop();
+    
     return 0;
 }
