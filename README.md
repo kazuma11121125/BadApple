@@ -25,6 +25,9 @@ sudo apt-get install libsfml-dev
 ### セットアップ
 Mp4動画をセットし、動画ファイル名を必要に応じて変更する。sh cmake.shでビルドを行い、sh run.shで実行する。  
 ```c
-const int HEIGHT = 40; // 10行目 描画高さの調整。
-const std::string FILENAME = "bad_apple.mp4"; // 11行目 動画ファイル名
+//11行目～14行目
+const int HEIGHT = 40; //動画の大きさ調整
+const float volume = 80.0f; //音声の音量調整
+const float speed = 0.970f; //音声再生スピード調整
+const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 ```
