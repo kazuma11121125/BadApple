@@ -6,12 +6,13 @@
 #include <opencv2/opencv.hpp>
 #include <SFML/Audio.hpp>
 #include <thread>
+#include <chrono>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
-const int HEIGHT = 40;
-const float volume = 50.0f;
-const float speed = 0.970f;
-const std::string FILENAME = "aaa.webm"; // 動画ファイル名
+const int HEIGHT = 100;
+const float volume = 80.0f;
+const float speed = 1.0f;
+const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -50,7 +51,7 @@ std::string doProcess(const cv::Mat& image) {
 int main() {
     cv::VideoCapture vidObj(FILENAME);
     if (!vidObj.isOpened()) {
-        std::cerr << "error: Not open file" << std::endl;
+        std::cerr << "Error: Could not open file" << std::endl;
         return -1;
     }
     
@@ -79,17 +80,35 @@ int main() {
         return -1;
     }
     music.setPitch(speed);
+    system("clear");
     std::cout << "All set...Press Enter to start the video" << std::endl;
     std::cin.get();
     music.setVolume(volume);
     music.play();
-    int i = 0;
-    for (const auto& frame : frames) {
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < frames.size(); ++i) {
+        auto current_time = std::chrono::high_resolution_clock::now();// Get current time
+        std::chrono::duration<double> total_elapsed_time = current_time - start_time;// Calculate total elapsed time
+        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);// Calculate expected frame index
+        
+        if (i < expected_frame_index) {
+            continue; // Skip frames if behind the expected frame index
+        }
+        
+        auto frame_start_time = std::chrono::high_resolution_clock::now();// Start frame processing time
+        
         system("clear");
-        std::cout << "フレーム数: " << i << std::endl;
-        std::cout << frame << std::endl;
-        i++;
-        usleep(1000000 / fps);
+        std::cout << "Frame: " << i << std::endl;
+        std::cout << frames[i] << std::endl;
+        
+        auto frame_end_time = std::chrono::high_resolution_clock::now();// End frame processing time
+        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;// Calculate frame processing time
+        double sleep_time = (1.0 / fps) - processing_time.count();// Calculate sleep time
+        if (sleep_time > 0) {// Sleep if sleep time is positive
+            std::cout << "Sleep time: " << sleep_time << std::endl;
+            usleep(static_cast<int>(sleep_time * 1000000));// Convert sleep time to microseconds
+        }
     }
     
     std::cout << "Video completed" << std::endl;
