@@ -24,10 +24,15 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image) {
+cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.0, int beta = 0) {
     cv::Mat gray_image;
     cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
-    return gray_image;
+
+    // コントラストと明るさを調整
+    cv::Mat adjusted_image;
+    gray_image.convertTo(adjusted_image, -1, alpha, beta);
+
+    return adjusted_image;
 }
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
