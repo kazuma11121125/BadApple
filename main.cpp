@@ -9,10 +9,10 @@
 #include <chrono>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
-const int HEIGHT = 100;
+const int HEIGHT = 40;
 const float volume = 80.0f;
 const float speed = 1.0f;
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+const std::string FILENAME = "kkk.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -24,28 +24,27 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image) {
-    cv::Mat gray_image;
-    cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
-    return gray_image;
-}
-
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
+    new_pixels.reserve(image.rows * image.cols * 13); // 文字列の容量を事前に確保
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = image.at<uchar>(i, j);
-            new_pixels += ASCII_CHARS[pixel_value / buckets];
+            cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
+            int blue = pixel[0];
+            int green = pixel[1];
+            int red = pixel[2];
+            int gray = (red + green + blue) / 3;
+            int color_index = gray / buckets;
+            new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" + ASCII_CHARS[color_index];
         }
-        new_pixels += '\n';
+        new_pixels += "\n";
     }
-    return new_pixels;
+    return new_pixels + "\033[0m"; // フレームの最後に色をリセット
 }
 
 std::string doProcess(const cv::Mat& image) {
     cv::Mat resized_image = resize(image, HEIGHT);
-    cv::Mat gray_image = grayscalify(resized_image);
-    return modify(gray_image);
+    return modify(resized_image);
 }
 
 int main() {
@@ -88,26 +87,27 @@ int main() {
     
     auto start_time = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < frames.size(); ++i) {
-        auto current_time = std::chrono::high_resolution_clock::now();// Get current time
-        std::chrono::duration<double> total_elapsed_time = current_time - start_time;// Calculate total elapsed time
-        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);// Calculate expected frame index
+        auto current_time = std::chrono::high_resolution_clock::now();// 現在の時刻を取得
+        std::chrono::duration<double> total_elapsed_time = current_time - start_time;// 総経過時間を計算
+        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);// 期待されるフレームインデックスを計算
         
         if (i < expected_frame_index) {
-            continue; // Skip frames if behind the expected frame index
+            continue; // 期待されるフレームインデックスに遅れている場合、フレームをスキップ
         }
         
-        auto frame_start_time = std::chrono::high_resolution_clock::now();// Start frame processing time
+        auto frame_start_time = std::chrono::high_resolution_clock::now();// フレーム処理の開始時刻
         
         system("clear");
         std::cout << "Frame: " << i << std::endl;
-        std::cout << frames[i] << std::endl;
+        //背景を黒に設定
+        std::cout << "\033[48;2;0;0;0m";
+        std::cout << frames[i] << std::flush; // std::endlの代わりにstd::flushを使用して出力バッファをフラッシュ
         
-        auto frame_end_time = std::chrono::high_resolution_clock::now();// End frame processing time
-        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;// Calculate frame processing time
-        double sleep_time = (1.0 / fps) - processing_time.count();// Calculate sleep time
-        if (sleep_time > 0) {// Sleep if sleep time is positive
-            std::cout << "Sleep time: " << sleep_time << std::endl;
-            usleep(static_cast<int>(sleep_time * 1000000));// Convert sleep time to microseconds
+        auto frame_end_time = std::chrono::high_resolution_clock::now();// フレーム処理の終了時刻
+        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;// フレーム処理時間を計算
+        double sleep_time = (1.0 / fps) - processing_time.count();// スリープ時間を計算
+        if (sleep_time > 0) {// スリープ時間が正の場合、スリープ
+            usleep(static_cast<int>(sleep_time * 1000000));// スリープ時間をマイクロ秒に変換
         }
     }
     
