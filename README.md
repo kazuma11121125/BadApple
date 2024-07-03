@@ -52,9 +52,9 @@ CPU | core i5 1235U
 RAM | 16GB  
 OS | Ubuntu 22.04 LTS  
   
-HEIGHT 40〜100範囲  
-白黒版FPS MAX 60fpsまで。  
-カラー版PFS MAX 10fps(fps_valueで30fps→10fpsみたいにしているため30fpsまでセット可能)。  
+HEIGHT 40〜100範囲(処理的問題 パソコンの性能によって左右)  
+白黒版FPS MAX 60fpsまで(処理的問題 パソコンの性能によって左右)。  
+カラー版PFS MAX 10fps(fps_valueで30fps→10fpsみたいにしているため30fpsまでセット可能 パソコンの性能によって左右)。  
 
 
 
