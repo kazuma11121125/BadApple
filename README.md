@@ -47,12 +47,10 @@ const std::string FILENAME = "idol.webm"; // 動画ファイル名
 
 ## 設定補足
 推奨OS:Ubuntu  
-
-kazuma1112実行環境  
--|-
-CPU | core i5 1235U
-RAM | 16GB
-OS | Ubuntu 22.04 LTS
+kazuma1112実行環境   
+CPU | core i5 1235U  
+RAM | 16GB  
+OS | Ubuntu 22.04 LTS  
   
 HEIGHT 40〜100範囲  
 白黒版FPS MAX 60fpsまで。  
