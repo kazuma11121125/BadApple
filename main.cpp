@@ -8,38 +8,45 @@
 #include <thread>
 #include <chrono>
 
-const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
-const int HEIGHT = 40;
+const std::vector<std::string> GRADIENT_CHARS = {"█", "▓", "▒", "░", " "}; 
 const float volume = 80.0f;
 const float speed = 1.0f;
-const std::string FILENAME = "kkk.webm"; // 動画ファイル名
+const int fps_value = 3;
+const int HEIGHT = 81; // 画像の高さ
+const std::string FILENAME = "www.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 2);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 3);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
 }
 
+
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
-    new_pixels.reserve(image.rows * image.cols * 13); // 文字列の容量を事前に確保
-    for (int i = 0; i < image.rows; ++i) {
-        for (int j = 0; j < image.cols; ++j) {
+    new_pixels.reserve(image.rows * image.cols * 13); // Pre-allocate memory
+    for (int i = 0; i < image.rows; i++) {
+        for (int j = 0; j < image.cols; j++) {
             cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
             int blue = pixel[0];
             int green = pixel[1];
             int red = pixel[2];
             int gray = (red + green + blue) / 3;
             int color_index = gray / buckets;
-            new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" + ASCII_CHARS[color_index];
+            if (color_index >= GRADIENT_CHARS.size()) {
+                color_index = GRADIENT_CHARS.size() - 1; // Ensure the index is within bounds
+            }
+            new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
+                          "\033[48;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
+                          GRADIENT_CHARS[color_index];
         }
         new_pixels += "\n";
     }
-    return new_pixels + "\033[0m"; // フレームの最後に色をリセット
+    return new_pixels + "\033[0m"; // Reset color at the end
 }
 
 std::string doProcess(const cv::Mat& image) {
@@ -64,15 +71,17 @@ int main() {
     std::cout << "Frame count: " << frame_count << std::endl;
     cv::Mat image;
     
-    for (int i = 0; i < frame_count; ++i) {
+    for (int i = 0; i < frame_count; i += fps_value) { // フレームを3つおきに処理
         if (!vidObj.read(image)) break;
         std::string frame = doProcess(image);
         if (!frame.empty()) frames.push_back(frame);
-        std::cout << "Frame " << i << " Completed" << std::endl;
+        std::cout << "Frame " << i/fps_value << " Completed" << std::endl; // i/fps_value を表示
+        for (int j = 1; j < fps_value; ++j) {
+            if (!vidObj.grab()) break; // 次のフレームをスキップ
+        }
     }
     t.join();
-    float fps = vidObj.get(cv::CAP_PROP_FPS);
-    std::cout << "FPS: " << fps << std::endl;
+    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value; 
     sf::Music music;
     if (!music.openFromFile("output.ogg")) {
         std::cerr << "Error loading audio file" << std::endl;
@@ -80,37 +89,36 @@ int main() {
     }
     music.setPitch(speed);
     system("clear");
+    std::cout << "Adjusted FPS: " << fps << std::endl;
+    std::cout << "Frame count: " << frames.size() << std::endl;
     std::cout << "All set...Press Enter to start the video" << std::endl;
     std::cin.get();
     music.setVolume(volume);
     music.play();
-    
     auto start_time = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < frames.size(); ++i) {
-        auto current_time = std::chrono::high_resolution_clock::now();// 現在の時刻を取得
-        std::chrono::duration<double> total_elapsed_time = current_time - start_time;// 総経過時間を計算
-        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);// 期待されるフレームインデックスを計算
+    for (int i = 0; i < frames.size(); i++) {
+        auto current_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> total_elapsed_time = current_time - start_time;
+        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);
         
-        if (i < expected_frame_index) {
-            continue; // 期待されるフレームインデックスに遅れている場合、フレームをスキップ
+        while (i < expected_frame_index) {
+            if (i >= frames.size()) break;
+            i++; // Skip frames if behind
         }
-        
-        auto frame_start_time = std::chrono::high_resolution_clock::now();// フレーム処理の開始時刻
-        
+        auto frame_start_time = std::chrono::high_resolution_clock::now();
         system("clear");
-        std::cout << "Frame: " << i << std::endl;
-        //背景を黒に設定
-        std::cout << "\033[48;2;0;0;0m";
-        std::cout << frames[i] << std::flush; // std::endlの代わりにstd::flushを使用して出力バッファをフラッシュ
-        
-        auto frame_end_time = std::chrono::high_resolution_clock::now();// フレーム処理の終了時刻
-        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;// フレーム処理時間を計算
-        double sleep_time = (1.0 / fps) - processing_time.count();// スリープ時間を計算
-        if (sleep_time > 0) {// スリープ時間が正の場合、スリープ
-            usleep(static_cast<int>(sleep_time * 1000000));// スリープ時間をマイクロ秒に変換
+        std::cout << "\033[48;2;0;0;0m"; // Set background to black
+        std::cout << frames[i] << std::flush;
+        auto frame_end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
+        double sleep_time = (1.0 / fps) - processing_time.count();
+        // std::cout << "Frame: " << i << std::endl;
+        // std::cout << "Processing time: " << processing_time.count() << std::endl;
+        // std::cout << "Sleep time: " << sleep_time << std::endl;
+        if (sleep_time > 0) {
+            std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
         }
     }
-    
     std::cout << "Video completed" << std::endl;
     music.stop();
     
