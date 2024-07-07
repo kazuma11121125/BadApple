@@ -9,26 +9,25 @@
 #include <chrono>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
-const int HEIGHT = 100;
+const int HEIGHT = 81;
 const float volume = 80.0f;
 const float speed = 1.0f;
+const int fps_value = 2;
 const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 2);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 3);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.0, int beta = 0) {
+cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.5, int beta = 0) {
     cv::Mat gray_image;
     cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
-
-    // コントラストと明るさを調整
     cv::Mat adjusted_image;
     gray_image.convertTo(adjusted_image, -1, alpha, beta);
 
@@ -70,14 +69,17 @@ int main() {
     std::cout << "Frame count: " << frame_count << std::endl;
     cv::Mat image;
     
-    for (int i = 0; i < frame_count; ++i) {
+    for (int i = 0; i < frame_count; i+=fps_value) {
         if (!vidObj.read(image)) break;
         std::string frame = doProcess(image);
         if (!frame.empty()) frames.push_back(frame);
         std::cout << "Frame " << i << " Completed" << std::endl;
+        for (int j = 1; j < fps_value; ++j) {
+            if (!vidObj.grab()) break; // 次のフレームをスキップ
+        }
     }
     t.join();
-    float fps = vidObj.get(cv::CAP_PROP_FPS);
+    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value;
     std::cout << "FPS: " << fps << std::endl;
     sf::Music music;
     if (!music.openFromFile("output.ogg")) {
@@ -90,29 +92,25 @@ int main() {
     std::cin.get();
     music.setVolume(volume);
     music.play();
-    
     auto start_time = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < frames.size(); ++i) {
-        auto current_time = std::chrono::high_resolution_clock::now();// Get current time
-        std::chrono::duration<double> total_elapsed_time = current_time - start_time;// Calculate total elapsed time
-        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);// Calculate expected frame index
+    for (int i = 0; i < frames.size(); i++) {
+        auto current_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> total_elapsed_time = current_time - start_time;
+        int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);
         
-        if (i < expected_frame_index) {
-            continue; // Skip frames if behind the expected frame index
+        while (i < expected_frame_index) {
+            if (i >= frames.size()) break;
+            i++; // Skip frames if behind
         }
-        
-        auto frame_start_time = std::chrono::high_resolution_clock::now();// Start frame processing time
-        
+        auto frame_start_time = std::chrono::high_resolution_clock::now();
         system("clear");
-        std::cout << "Frame: " << i << std::endl;
-        std::cout << frames[i] << std::endl;
-        
-        auto frame_end_time = std::chrono::high_resolution_clock::now();// End frame processing time
-        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;// Calculate frame processing time
-        double sleep_time = (1.0 / fps) - processing_time.count();// Calculate sleep time
-        if (sleep_time > 0) {// Sleep if sleep time is positive
-            std::cout << "Sleep time: " << sleep_time << std::endl;
-            usleep(static_cast<int>(sleep_time * 1000000));// Convert sleep time to microseconds
+        std::cout << "\033[48;2;0;0;0m"; // Set background to black
+        std::cout << frames[i] << std::flush;
+        auto frame_end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
+        double sleep_time = (1.0 / fps) - processing_time.count();
+        if (sleep_time > 0) {
+            std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
         }
     }
     
