@@ -11,9 +11,9 @@
 const std::vector<std::string> GRADIENT_CHARS = {"█", "▓", "▒", "░", " "}; 
 const float volume = 80.0f;
 const float speed = 1.0f;
-const int fps_value = 3;
-const int HEIGHT = 81; // 画像の高さ
-const std::string FILENAME = "www.webm"; // 動画ファイル名
+const int fps_value = 2;
+const int HEIGHT = 93; // 画像の高さ
+const std::string FILENAME = "idol.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -22,6 +22,7 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int new_width = static_cast<int>(aspect_ratio * new_height * 3);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
+    std::cout << "Resized image to " << new_width << "x" << new_height << std::endl;    
     return resized_image;
 }
 
@@ -39,7 +40,7 @@ std::string modify(const cv::Mat& image, int buckets = 25) {
             int color_index = gray / buckets;
             if (color_index >= GRADIENT_CHARS.size()) {
                 color_index = GRADIENT_CHARS.size() - 1; // Ensure the index is within bounds
-            }
+            }            
             new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
                           "\033[48;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
                           GRADIENT_CHARS[color_index];
@@ -100,21 +101,16 @@ int main() {
         auto current_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> total_elapsed_time = current_time - start_time;
         int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);
-        
         while (i < expected_frame_index) {
             if (i >= frames.size()) break;
             i++; // Skip frames if behind
         }
         auto frame_start_time = std::chrono::high_resolution_clock::now();
         system("clear");
-        std::cout << "\033[48;2;0;0;0m"; // Set background to black
-        std::cout << frames[i] << std::flush;
+        write(STDOUT_FILENO, frames[i].c_str(), strlen(frames[i].c_str()));
         auto frame_end_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
         double sleep_time = (1.0 / fps) - processing_time.count();
-        // std::cout << "Frame: " << i << std::endl;
-        // std::cout << "Processing time: " << processing_time.count() << std::endl;
-        // std::cout << "Sleep time: " << sleep_time << std::endl;
         if (sleep_time > 0) {
             std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
         }
