@@ -9,7 +9,7 @@
 #include <chrono>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", "⠀"};
-const int HEIGHT = 81;
+const int HEIGHT = 93;
 const float volume = 80.0f;
 const float speed = 1.0f;
 const int fps_value = 2;
@@ -105,7 +105,7 @@ int main() {
         auto frame_start_time = std::chrono::high_resolution_clock::now();
         system("clear");
         std::cout << "\033[48;2;0;0;0m"; // Set background to black
-        std::cout << frames[i] << std::flush;
+        write(STDOUT_FILENO, frames[i].c_str(), strlen(frames[i].c_str()));
         auto frame_end_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
         double sleep_time = (1.0 / fps) - processing_time.count();
