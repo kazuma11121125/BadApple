@@ -27,6 +27,7 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
+    new_pixels += "\033[H\033[J";
     new_pixels.reserve(image.rows * image.cols * 13); // Pre-allocate memory
     for (int i = 0; i < image.rows; i++) {
         for (int j = 0; j < image.cols; j++) {
@@ -110,7 +111,6 @@ int main() {
             }
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             std::lock_guard<std::mutex> lock(mtx);
-            std::cout << "\033[H\033[J" << std::flush;
             write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
             auto frame_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
