@@ -81,7 +81,7 @@ int main() {
         std::cout << "Processing frame " << i << " of " << frame_count << std::endl;
     }
     t.join();
-    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value; 
+    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed; // Adjust fps according to speed
     sf::Music music;
     if (!music.openFromFile("output.ogg")) {
         std::cerr << "Error loading audio file" << std::endl;
