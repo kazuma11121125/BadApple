@@ -35,7 +35,7 @@ cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.0, int beta = 0) {
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
-    new_pixels += "\033[H\033[J";
+    new_pixels += "\033[H";// Move cursor to the top
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
             int pixel_value = image.at<uchar>(i, j);
@@ -104,7 +104,6 @@ int main() {
             }
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             write(STDOUT_FILENO, frames[i].c_str(), strlen(frames[i].c_str()));
-            // std::cout << frames[i] << std::flush;
             auto frame_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
             double sleep_time = (1.0 / fps) - processing_time.count();
