@@ -11,15 +11,15 @@
 const std::vector<std::string> GRADIENT_CHARS = {"█", "▓", "▒", "░", " "}; 
 const float volume = 80.0f;
 const float speed = 1.0f;
-const int fps_value = 2;
-const int HEIGHT = 95; // 画像の高さ
+const int fps_value = 3;
+const int HEIGHT = 100; // 画像の高さ
 const std::string FILENAME = "idol.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 3);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 4);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
@@ -27,7 +27,7 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
-    new_pixels += "\033[H\033[J";
+    new_pixels += "\033[H";// Move cursor to the top
     new_pixels.reserve(image.rows * image.cols * 13); // Pre-allocate memory
     for (int i = 0; i < image.rows; i++) {
         for (int j = 0; j < image.cols; j++) {
