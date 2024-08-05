@@ -11,21 +11,23 @@
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
 const float volume = 80.0f;
 const float speed = 1.0f;
-const int HEIGHT = 70;
+const int HEIGHT = 530;
 const int fps_value = 1;
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+const std::string FILENAME = "sen.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 3.5);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 3);
+    //width x hight
+    std::cout << "width" << new_width << "height" << new_height << std::endl;
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.0, int beta = 0) {
+cv::Mat grayscalify(const cv::Mat& image, double alpha = 2.0, int beta = 0) {
     cv::Mat gray_image;
     cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
     cv::Mat adjusted_image;
@@ -73,7 +75,8 @@ int main() {
         if (!vidObj.read(image)) break;
         std::string frame = doProcess(image);
         if (!frame.empty()) frames.push_back(frame);
-        std::cout << "Frame " << i << " Completed" << std::endl;
+        std::cout << "Frame " << i << "/" << frame_count << std::endl;
+        //すべてのフレーム
         for (int j = 1; j < fps_value; ++j) {
             if (!vidObj.grab()) break; // 次のフレームをスキップ
         }
