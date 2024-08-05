@@ -9,10 +9,10 @@
 #include <chrono>
 
 const std::vector<std::string> GRADIENT_CHARS = {"█", "▓", "▒", "░", " "}; 
-const float volume = 80.0f;
+const float volume = 10.0f;
 const float speed = 1.0f;
 const int fps_value = 3;
-const int HEIGHT = 105; // 画像の高さ
+const int HEIGHT = 230; // 画像の高さ
 const std::string FILENAME = "idol.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
@@ -28,8 +28,11 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
-    new_pixels += "\033[H";// Move cursor to the top
+    new_pixels += "\033[H"; // Move cursor to the top
     new_pixels.reserve(image.rows * image.cols * 13); // Pre-allocate memory
+    int prev_red = -1;
+    int prev_green = -1;
+    int prev_blue = -1;
     for (int i = 0; i < image.rows; i++) {
         for (int j = 0; j < image.cols; j++) {
             cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
@@ -40,15 +43,21 @@ std::string modify(const cv::Mat& image, int buckets = 25) {
             int color_index = gray / buckets;
             if (color_index >= GRADIENT_CHARS.size()) {
                 color_index = GRADIENT_CHARS.size() - 1; // Ensure the index is within bounds
-            }            
-            new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
-                          "\033[48;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
-                          GRADIENT_CHARS[color_index];
+            }
+            if (red != prev_red || green != prev_green || blue != prev_blue) {
+                prev_red = red;
+                prev_green = green;
+                prev_blue = blue;
+                new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
+                              "\033[48;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m";
+            }
+            new_pixels += GRADIENT_CHARS[color_index];
         }
         new_pixels += "\n";
     }
     return new_pixels + "\033[0m"; // Reset color at the end
 }
+
 
 std::string doProcess(const cv::Mat& image) {
     cv::Mat resized_image = resize(image, HEIGHT);
