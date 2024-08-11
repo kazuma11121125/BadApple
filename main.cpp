@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <ctime>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/cuda.hpp>
 #include <SFML/Audio.hpp>
 #include <thread>
 #include <chrono>
@@ -33,9 +34,15 @@ std::string modify(const cv::Mat& image, int buckets = 25) {
     int prev_red = -1;
     int prev_green = -1;
     int prev_blue = -1;
+    //CUDAに対応する
+    cv::cuda::GpuMat d_image;
+    d_image.upload(image);
     for (int i = 0; i < image.rows; i++) {
         for (int j = 0; j < image.cols; j++) {
-            cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
+            cv::Vec3b pixel;
+            pixel[0] = d_image.ptr<cv::Vec3b>(i)[j][0];
+            pixel[1] = d_image.ptr<cv::Vec3b>(i)[j][1];
+            pixel[2] = d_image.ptr<cv::Vec3b>(i)[j][2];
             int blue = pixel[0];
             int green = pixel[1];
             int red = pixel[2];
@@ -72,12 +79,22 @@ int main() {
         std::cerr << "Error: Could not open file" << std::endl;
         return -1;
     }
-    
-    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.ogg";
-    std::thread t([&commands](){
-        system(commands.c_str());
-    });
-    
+    int cuda_device_count = cv::cuda::getCudaEnabledDeviceCount();
+    printf("CUDA Device Count: %d\n", cuda_device_count);
+    if (!cuda_device_count) {
+        std::cerr << "Error: CUDA device not found" << std::endl;
+        return -1;
+    }
+    // if (!cv::cuda::getCudaEnabledDeviceCount()) {
+    //     std::cerr << "Error: CUDA device not found" << std::endl;
+    //     return -1;
+    // }
+    //音声を抽出 GPUを使って
+    // std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.ogg";
+    // std::string commands = "ffmpeg -y -hwaccel cuda -i " + FILENAME + " -vn -acodec libvorbis output.ogg";
+    // std::thread t([&commands](){
+    //     system(commands.c_str());
+    // });
     std::vector<std::string> frames;
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
@@ -91,7 +108,7 @@ int main() {
         }
         std::cout << "Processing frame " << i << " of " << frame_count << std::endl;
     }
-    t.join();
+    // t.join();
     float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed; // Adjust fps according to speed
     sf::Music music;
     if (!music.openFromFile("output.ogg")) {

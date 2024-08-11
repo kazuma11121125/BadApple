@@ -15,3 +15,8 @@ add_executable(Bad-Apple main.cpp)
 target_link_libraries(Bad-Apple ${OpenCV_LIBS})
 target_link_libraries(Bad-Apple sfml-audio)
 target_compile_options(Bad-Apple PRIVATE -O0)
+
+# CUDAサポートを追加
+include_directories(${OpenCV_INCLUDE_DIRS} /usr/local/include/opencv4)
+find_package(CUDAToolkit REQUIRED)
+target_link_libraries(Bad-Apple CUDA::cudart CUDA::cublas CUDA::cusolver)
