@@ -11,9 +11,9 @@
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
 const float volume = 80.0f;
 const float speed = 1.0f;
-const int HEIGHT = 530;
+const int HEIGHT = 340;
 const int fps_value = 1;
-const std::string FILENAME = "sen.mp4"; // 動画ファイル名
+const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -71,7 +71,7 @@ int main() {
     std::cout << "Frame count: " << frame_count << std::endl;
     cv::Mat image;
     
-    for (int i = 0; i < frame_count; i+=fps_value) {
+    for (size_t i = 0; i < frame_count; i+=fps_value) {
         if (!vidObj.read(image)) break;
         std::string frame = doProcess(image);
         if (!frame.empty()) frames.push_back(frame);
@@ -91,13 +91,17 @@ int main() {
     }
     music.setPitch(speed);
     system("clear");
+    std::cout << "Frame count: " << frame_count << std::endl;
+    std::cout << "FPS: " << fps << std::endl;
+    std::cout << "width: " << image.cols << " height: " << image.rows << std::endl;
+    std::cout << "Character count: " << frames[0].size() << std::endl;
     std::cout << "All set...Press Enter to start the video" << std::endl;
     std::cin.get();
     music.setVolume(volume);
     music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
     std::thread display_thread([&frames, &start_time, fps](){
-        for (int i = 0; i < frames.size(); i++) {
+        for (size_t i = 0; i < frames.size(); i++) {
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> total_elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);
