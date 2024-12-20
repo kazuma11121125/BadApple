@@ -9,11 +9,11 @@
 #include <chrono>
 
 const std::vector<std::string> GRADIENT_CHARS = {"█", "▓", "▒", "░", " "}; 
-const float volume = 10.0f;
+const float volume = 70.0f;
 const float speed = 1.0f;
-const int fps_value = 3;
-const int HEIGHT = 230; // 画像の高さ
-const std::string FILENAME = "idol.webm"; // 動画ファイル名
+const int fps_value = 1;
+const int HEIGHT = 250; // 画像の高さ
+const std::string FILENAME = "over.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -28,36 +28,39 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
     std::string new_pixels;
-    new_pixels += "\033[H"; // Move cursor to the top
-    new_pixels.reserve(image.rows * image.cols * 13); // Pre-allocate memory
+    new_pixels += "\033[H"; // カーソルをトップに移動
+    new_pixels.reserve(image.rows * image.cols * 10); // メモリを事前に確保
     int prev_red = -1;
     int prev_green = -1;
     int prev_blue = -1;
+
     for (int i = 0; i < image.rows; i++) {
         for (int j = 0; j < image.cols; j++) {
             cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
             int blue = pixel[0];
             int green = pixel[1];
             int red = pixel[2];
-            int gray = (red + green + blue) / 3;
-            int color_index = gray / buckets;
-            if (color_index >= GRADIENT_CHARS.size()) {
-                color_index = GRADIENT_CHARS.size() - 1; // Ensure the index is within bounds
-            }
-            if (red != prev_red || green != prev_green || blue != prev_blue) {
-                prev_red = red;
-                prev_green = green;
-                prev_blue = blue;
-                new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
-                              "\033[48;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m";
-            }
-            new_pixels += GRADIENT_CHARS[color_index];
-        }
-        new_pixels += "\n";
-    }
-    return new_pixels + "\033[0m"; // Reset color at the end
-}
 
+            // 色を量子化（64単位で丸める）
+            int quantized_red = (red / 3) * 3;
+            int quantized_green = (green / 3) * 3;
+            int quantized_blue = (blue / 3) * 3;
+
+            // 色が変わる場合のみカラーコードを追加
+            if (quantized_red != prev_red || quantized_green != prev_green || quantized_blue != prev_blue) {
+                prev_red = quantized_red;
+                prev_green = quantized_green;
+                prev_blue = quantized_blue;
+                new_pixels += "\033[48;2;" + std::to_string(quantized_red) + ";" + 
+                              std::to_string(quantized_green) + ";" + 
+                              std::to_string(quantized_blue) + "m";
+            }
+            new_pixels += " ";
+        }
+        new_pixels += "\n"; // 行の終わり
+    }
+    return new_pixels + "\033[0m";
+}
 
 std::string doProcess(const cv::Mat& image) {
     cv::Mat resized_image = resize(image, HEIGHT);
@@ -82,7 +85,7 @@ int main() {
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
     
-    for (int i = 0; i < frame_count; i += fps_value) {
+    for (size_t i = 0; i < frame_count; i += fps_value) {
         if (!vidObj.read(image)) break;
         std::string frame = doProcess(image);
         if (!frame.empty()) frames.push_back(frame);
@@ -111,7 +114,7 @@ int main() {
     auto start_time = std::chrono::high_resolution_clock::now();
     std::thread display_thread([&frames, &start_time, fps]() {
         std::mutex mtx;
-        for (int i = 0; i < frames.size(); i++) {
+        for (size_t i = 0; i < frames.size(); i++) {
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> total_elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);

@@ -14,4 +14,14 @@ add_executable(Bad-Apple main.cpp)
 
 target_link_libraries(Bad-Apple ${OpenCV_LIBS})
 target_link_libraries(Bad-Apple sfml-audio)
-target_compile_options(Bad-Apple PRIVATE -O0)
+
+# 最適化オプションの設定
+target_compile_options(Bad-Apple PRIVATE 
+    -O3 
+    -march=native 
+    -ffast-math 
+    -fomit-frame-pointer 
+    -flto 
+    # -Wno-sign-compare
+    -Wno-unused-result
+)
