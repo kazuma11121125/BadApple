@@ -7,3 +7,10 @@ video
 play
 *.ogg
 *.py
+*.txt
+*.json
+__pycache__
+myenv
+*.pyc
+*wav
+*mp3

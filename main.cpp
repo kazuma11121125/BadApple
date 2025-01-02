@@ -14,7 +14,8 @@ const float volume = 70.0f;
 const float speed = 1.0f;
 const int fps_value = 1;
 const int HEIGHT = 300; // 画像の高さ
-const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
+const float sleep_value = 2; //待機時間
+const std::string FILENAME = "idol.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -28,16 +29,15 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
 
 std::string modify(const cv::Mat& image) {
     std::ostringstream oss;
-    oss << "\033[H"; // カーソルをトップに移動
+    oss << "\033[H";
     int prev_red = -1, prev_green = -1, prev_blue = -1;
-
     for (int i = 0; i < image.rows; ++i) {
+        const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(i);
         for (int j = 0; j < image.cols; ++j) {
-            cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
+            const cv::Vec3b& pixel = row_ptr[j];
             int quantized_red = (pixel[2] / 3) * 3;
             int quantized_green = (pixel[1] / 3) * 3;
             int quantized_blue = (pixel[0] / 3) * 3;
-
             if (quantized_red != prev_red || quantized_green != prev_green || quantized_blue != prev_blue) {
                 oss << "\033[48;2;" << quantized_red << ";" << quantized_green << ";" << quantized_blue << "m";
                 prev_red = quantized_red;
@@ -65,54 +65,66 @@ int main() {
         std::cerr << "Error: Could not open file" << std::endl;
         return -1;
     }
-    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.ogg";
+    std::string commands = "ffmpeg -y -hwaccel cuda -i " + FILENAME + " -vn output.wav";
     std::thread t([&commands](){
         system(commands.c_str());
     });
-    std::vector<std::string> frames;
+    std::vector<std::string> frames;    
     std::mutex frames_mutex;
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
-    for (size_t i = 0; i < frame_count; i += fps_value) {
-        if (!vidObj.read(image)) break;
-        std::string frame = doProcess(image);
-        if (!frame.empty()) {
-            std::lock_guard<std::mutex> lock(frames_mutex);
-            frames.push_back(frame);
+    FILE *fp;
+    fp = fopen("output.txt", "w");
+    std::thread cv_thred([&frame_count, &frames,&vidObj,&image,&frames_mutex,&fp](){
+        for (size_t i = 0; i < frame_count; i += fps_value) {
+            // fprintf(fp, "start frame = %ld ", i);
+            if (!vidObj.read(image)) break;
+            std::string frame = doProcess(image);
+            if (!frame.empty()) {
+                std::lock_guard<std::mutex> lock(frames_mutex);
+                frames.emplace_back(frame);
+            }
+            for (int j = 1; j < fps_value; j++) {
+                if (!vidObj.grab()) break;
+            }
         }
-        for (int j = 1; j < fps_value; j++) {
-            if (!vidObj.grab()) break;
-        }
-        std::cout << "Processing frame " << i << " of " << frame_count << std::endl;
-    }
+        vidObj.release();
+    });
     t.join();
+    while (frames.size() < (frame_count / fps_value) / sleep_value) {
+        fprintf(fp, "frames.size() = %ld\n", frames.size());
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    system("clear");
     float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed;
     sf::Music music;
-    if (!music.openFromFile("output.ogg")) {
+    if (!music.openFromFile("output.wav")) {
         std::cerr << "Error loading audio file" << std::endl;
         return -1;
     }
     music.setPitch(speed);
-    system("clear");
-    std::cout << "Adjusted FPS: " << fps << std::endl;
-    std::cout << "Frame count: " << frames.size() << std::endl;
-    std::cout << "All set...Press Enter to start the video" << std::endl;
-    std::cin.get();
     music.setVolume(volume);
     music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
-    std::thread display_thread([&frames, &start_time, &frames_mutex, fps]() {
-        for (size_t i = 0; i < frames.size(); ++i) {
+    std::thread display_thread([&frames, &start_time, &frames_mutex, fps,frame_count,&fp]() {
+        for (size_t i = 0; i < (frame_count / fps_value); ++i) {
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
-            while (i < expected_frame_index && i < frames.size()) {
+            while (i < expected_frame_index && i < (frame_count / fps_value)) {
                 ++i;
             }
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             {
-                std::lock_guard<std::mutex> lock(frames_mutex);
-                write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
+                if (i <= frames.size()) {
+                    std::lock_guard<std::mutex> lock(frames_mutex);
+                    write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
+                    //使用したフレームをswapで削除
+                    frames[i].clear();
+                    frames[i].swap(frames.back());
+                }else{
+                    fprintf(fp, "frame = %ld,frames.size() = %ld\n", i,frames.size());
+                }
             }
             auto frame_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
@@ -120,11 +132,15 @@ int main() {
             if (sleep_time > 0) {
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
+            fprintf(fp, "display frame = %ld,processing_time = %f,sleep_time = %f, frames.size - i = %ld\n", i,processing_time.count(),sleep_time,frames.size() - i);
         }
     });
 
     display_thread.join();
+    system("clear");
+    printf("end_display\n");
     music.stop();
-    std::cout << "Video completed" << std::endl;
+    fprintf(fp, "end\n");
+    fclose(fp);
     return 0;
 }
