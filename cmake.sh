@@ -1,25 +1,26 @@
+#!/bin/bash
+
 echo "${ART}"
 
-# プロジェクトディレクトリのパス
 PROJECT_DIR="$PWD"
 
-# ビルドディレクトリのパス
 BUILD_DIR="$PROJECT_DIR/build"
 
-# CMake の実行
-echo "Running CMake..."
-cmake -G Ninja -B "$BUILD_DIR" "$PROJECT_DIR"
+if [ -d "$BUILD_DIR" ]; then
+    echo "Cleaning up old build directory..."
+    rm -rf "$BUILD_DIR"
+fi
 
-# カレントディレクトリをビルドディレクトリに変更
+echo "Running CMake..."
+cmake -G Ninja -B "$BUILD_DIR" "$PROJECT_DIR" -DCMAKE_BUILD_TYPE=Debug
+
 cd "$BUILD_DIR" || exit
 
-# Ninja を使用してビルド
 echo "Building project with Ninja..."
-ninja
+ninja > build.log 2>&1
 
-# ビルドが成功したかを確認
 if [ $? -eq 0 ]; then
     echo "Build successful!"
 else
-    echo "Build failed!"
+    echo "Build failed! Check build.log for details."
 fi

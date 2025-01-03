@@ -13,9 +13,9 @@
 const float volume = 70.0f;
 const float speed = 1.0f;
 const int fps_value = 1;
-const int HEIGHT = 300; // 画像の高さ
-const float sleep_value = 2; //待機時間
-const std::string FILENAME = "idol.webm"; // 動画ファイル名
+const int HEIGHT = 240; // 画像の高さ
+const float sleep_value = 4; //待機時間
+const std::string FILENAME = "sen.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -65,30 +65,42 @@ int main() {
         std::cerr << "Error: Could not open file" << std::endl;
         return -1;
     }
-    std::string commands = "ffmpeg -y -hwaccel cuda -i " + FILENAME + " -vn output.wav";
-    std::thread t([&commands](){
-        system(commands.c_str());
-    });
     std::vector<std::string> frames;    
     std::mutex frames_mutex;
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
     FILE *fp;
     fp = fopen("output.txt", "w");
-    std::thread cv_thred([&frame_count, &frames,&vidObj,&image,&frames_mutex,&fp](){
-        for (size_t i = 0; i < frame_count; i += fps_value) {
-            // fprintf(fp, "start frame = %ld ", i);
-            if (!vidObj.read(image)) break;
-            std::string frame = doProcess(image);
-            if (!frame.empty()) {
-                std::lock_guard<std::mutex> lock(frames_mutex);
-                frames.emplace_back(frame);
+    std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp](){
+        try {
+            for (size_t i = 0; i < frame_count; i += fps_value) {
+                if (!vidObj.read(image)) break;
+                std::string frame = doProcess(image);
+                if (!frame.empty()) {
+                    std::lock_guard<std::mutex> lock(frames_mutex);
+                    frames.emplace_back(frame);
+                }
+                for (int j = 1; j < fps_value; j++) {
+                    if (!vidObj.grab()) break;
+                }
             }
-            for (int j = 1; j < fps_value; j++) {
-                if (!vidObj.grab()) break;
-            }
+            vidObj.release();
+            fprintf(fp, "end_cv2\n");
+        } catch (const std::exception& e) {
+            std::cerr << "Exception in cv_thred: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "Unknown exception in cv_thred" << std::endl;
         }
-        vidObj.release();
+    });
+    std::string commands = "ffmpeg -y -hwaccel cuda -i " + FILENAME + " -vn output.wav";
+    std::thread t([&commands](){
+        try {
+            system(commands.c_str());
+        } catch (const std::exception& e) {
+            std::cerr << "Exception in ffmpeg thread: " << e.what() << std::endl;
+        } catch (...) {
+            std::cerr << "Unknown exception in ffmpeg thread" << std::endl;
+        }
     });
     t.join();
     while (frames.size() < (frame_count / fps_value) / sleep_value) {
@@ -106,40 +118,46 @@ int main() {
     music.setVolume(volume);
     music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
-    std::thread display_thread([&frames, &start_time, &frames_mutex, fps,frame_count,&fp]() {
-        for (size_t i = 0; i < (frame_count / fps_value); ++i) {
-            auto current_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed_time = current_time - start_time;
-            int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
-            while (i < expected_frame_index && i < (frame_count / fps_value)) {
-                ++i;
-            }
-            auto frame_start_time = std::chrono::high_resolution_clock::now();
-            {
-                if (i <= frames.size()) {
-                    std::lock_guard<std::mutex> lock(frames_mutex);
-                    write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
-                    //使用したフレームをswapで削除
-                    frames[i].clear();
-                    frames[i].swap(frames.back());
-                }else{
-                    fprintf(fp, "frame = %ld,frames.size() = %ld\n", i,frames.size());
+    std::thread display_thread([&frames, &start_time, &frames_mutex, fps, frame_count, &fp]() {
+        try {
+            for (size_t i = 0; i < ((frame_count / fps_value) -2); ++i) {
+                auto current_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> elapsed_time = current_time - start_time;
+                int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
+                while (i < expected_frame_index && i < (frame_count / fps_value) && i < frames.size()) {
+                    ++i;
                 }
+                auto frame_start_time = std::chrono::high_resolution_clock::now();
+                {
+                    std::lock_guard<std::mutex> lock(frames_mutex);
+                    if (i < frames.size() && !frames[i].empty()) {
+                        write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
+                        frames[i].clear();
+                        frames[i].shrink_to_fit();
+                    } else {
+                        fprintf(fp, "frame = %ld, frames.size() = %ld\n", i, frames.size());
+                    }
+                }
+                auto frame_end_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
+                double sleep_time = (1.0 / fps) - processing_time.count();
+                if (sleep_time > 0) {
+                    std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
+                }
+                fprintf(fp, "display frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
             }
-            auto frame_end_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
-            double sleep_time = (1.0 / fps) - processing_time.count();
-            if (sleep_time > 0) {
-                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
-            }
-            fprintf(fp, "display frame = %ld,processing_time = %f,sleep_time = %f, frames.size - i = %ld\n", i,processing_time.count(),sleep_time,frames.size() - i);
+        } catch (const std::exception& e) {
+            fprintf(fp, "Exception in display_thread: %s\n", e.what());
+        } catch (...) {
+            fprintf(fp, "Unknown exception in display_thread\n");
         }
     });
 
     display_thread.join();
+    cv_thred.join();
+    music.stop();
     system("clear");
     printf("end_display\n");
-    music.stop();
     fprintf(fp, "end\n");
     fclose(fp);
     return 0;
