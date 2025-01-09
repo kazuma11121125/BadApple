@@ -15,7 +15,17 @@ constexpr float speed = 1.0f;
 constexpr int fps_value = 1;
 constexpr int HEIGHT = 240; // 画像の高さ
 constexpr float sleep_value = 4; //待機時間
-const std::string FILENAME = "sen.mp4"; // 動画ファイル名
+const std::string FILENAME = "www.webm"; // 動画ファイル名
+
+cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
+    int old_width = image.cols;
+    int old_height = image.rows;
+    float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 2.5);
+    cv::Mat resized_image;
+    cv::resize(image, resized_image, cv::Size(new_width, new_height));
+    return resized_image;
+}
 
 std::string modify(const cv::Mat& image) {
     std::ostringstream oss;
@@ -43,25 +53,16 @@ std::string modify(const cv::Mat& image) {
 }
 
 std::string doProcess(const cv::Mat& image) {
-    return modify(image);
+    cv::Mat resized_image = resize(image);
+    return modify(resized_image);
 }
 
 int main() {
-// HEIGHTを指定して、WIDTHを計算
-    int width = HEIGHT * 16 / 9 * 2.5;
-    std::string resize_command = "ffmpeg -y -hwaccel cuda -i " + std::string(FILENAME) + 
-        " -vf scale=" + std::to_string(width) + ":" + std::to_string(HEIGHT) + ",setsar=1 -c:v h264_nvenc output.mp4";
-
-    std::string commands = "ffmpeg -y -hwaccel cuda -i " + FILENAME + " -vn output.wav";
+    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.wav";
     std::thread t([&commands](){
         system(commands.c_str());
     });
-
-    std::thread t2([&resize_command](){
-        system(resize_command.c_str());
-    });
-    t2.join();
-    cv::VideoCapture vidObj("output.mp4");
+    cv::VideoCapture vidObj(FILENAME);
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(nullptr);
     if (!vidObj.isOpened()) {
