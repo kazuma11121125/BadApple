@@ -13,15 +13,15 @@
 constexpr float volume = 70.0f;
 constexpr float speed = 1.0f;
 constexpr int fps_value = 1;
-constexpr int HEIGHT = 240; // 画像の高さ
-constexpr float sleep_value = 4; //待機時間
-const std::string FILENAME = "www.webm"; // 動画ファイル名
+constexpr int HEIGHT = 251; // 画像の高さ
+constexpr float sleep_value = 5; //待機時間
+const std::string FILENAME = "yo.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 2.5);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 2.76);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
@@ -77,23 +77,29 @@ int main() {
     fp = fopen("output.txt", "w");
     std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp](){
         for (size_t i = 0; i < frame_count; i += fps_value) {
+            auto start_time = std::chrono::high_resolution_clock::now();
             if (!vidObj.read(image)) break;
             std::string frame = doProcess(image);
             if (!frame.empty()) {
                 std::lock_guard<std::mutex> lock(frames_mutex);
-                frames.emplace_back(frame);
+                frames.push_back(frame);
             }
             for (int j = 1; j < fps_value; j++) {
                 if (!vidObj.grab()) break;
             }
+            auto end_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed_time = end_time - start_time;
+            fprintf(fp, "frame = %ld, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(),frame.size());
         }
         vidObj.release();
         fprintf(fp, "end_cv2\n");
     });
 
     t.join();
-    while (frames.size() < (frame_count / fps_value) / sleep_value) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (sleep_value > 0) {
+        while (frames.size() < (frame_count / fps_value) / sleep_value) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
     }
     system("clear");
     float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed;
@@ -111,7 +117,6 @@ int main() {
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
-            std::lock_guard<std::mutex> lock(frames_mutex);
             while (i < expected_frame_index && i < (frame_count / fps_value) && i < frames.size()) {
                 ++i;
             }
@@ -119,8 +124,7 @@ int main() {
             {
                 if (i < frames.size() && !frames[i].empty()) {
                     write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
-                    frames[i].clear();
-                    frames[i].shrink_to_fit();
+
                 } else {
                     fprintf(fp, "frame = %ld, frames.size() = %ld\n", i, frames.size());
                 }
@@ -129,6 +133,13 @@ int main() {
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
             double sleep_time = (1.0 / fps) - processing_time.count();
             if (sleep_time > 0) {
+                std::lock_guard<std::mutex> lock(frames_mutex);
+                auto frame_clear_start = std::chrono::high_resolution_clock::now();
+                frames[i].clear();
+                frames[i].shrink_to_fit();
+                auto frame_clear_end_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
+                sleep_time -= frame_clear_time.count();
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
             fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
