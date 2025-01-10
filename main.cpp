@@ -9,25 +9,28 @@
 #include <chrono>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
-const float volume = 80.0f;
-const float speed = 1.0f;
-const int HEIGHT = 340;
-const int fps_value = 1;
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+constexpr float volume = 80.0f;
+constexpr float speed = 1.0f;
+constexpr int HEIGHT = 250;
+constexpr int fps_value = 1;
+constexpr int sleep_value = -1;
+const std::string FILENAME = "rak.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 3);
-    //width x hight
-    std::cout << "width" << new_width << "height" << new_height << std::endl;
+    int new_width = static_cast<int>(aspect_ratio * new_height * 2.65);
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image, double alpha = 2.0, int beta = 0) {
+cv::Mat grayscalify(const cv::Mat& image, double alpha = 1, int beta = 0) {
+    /*
+    alpha: contrast control [1.0-3.0]
+    beta: brightness control [0-100]
+    */
     cv::Mat gray_image;
     cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
     cv::Mat adjusted_image;
@@ -36,16 +39,16 @@ cv::Mat grayscalify(const cv::Mat& image, double alpha = 2.0, int beta = 0) {
 }
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
-    std::string new_pixels;
-    new_pixels += "\033[H";// Move cursor to the top
+    std::ostringstream oss;
+    oss << "\033[H";\
     for (int i = 0; i < image.rows; ++i) {
         for (int j = 0; j < image.cols; ++j) {
             int pixel_value = image.at<uchar>(i, j);
-            new_pixels += ASCII_CHARS[pixel_value / buckets];
+            oss << ASCII_CHARS[pixel_value / buckets];
         }
-        new_pixels += '\n';
+        oss << '\n';
     }
-    return new_pixels;
+    return oss.str();
 }
 
 std::string doProcess(const cv::Mat& image) {
@@ -60,69 +63,94 @@ int main() {
         std::cerr << "Error: Could not open file" << std::endl;
         return -1;
     }
-    
-    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.ogg";
+    std::ios_base::sync_with_stdio(false);
+    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.wav";
     std::thread t([&commands](){
         system(commands.c_str());
     });
     
     std::vector<std::string> frames;
+    std::mutex frames_mutex;
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
-    std::cout << "Frame count: " << frame_count << std::endl;
     cv::Mat image;
-    
-    for (size_t i = 0; i < frame_count; i+=fps_value) {
-        if (!vidObj.read(image)) break;
-        std::string frame = doProcess(image);
-        if (!frame.empty()) frames.push_back(frame);
-        std::cout << "Frame " << i << "/" << frame_count << std::endl;
-        //すべてのフレーム
-        for (int j = 1; j < fps_value; ++j) {
-            if (!vidObj.grab()) break; // 次のフレームをスキップ
+    FILE *fp;
+    fp = fopen("output.txt", "w");
+    std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp](){
+        for (size_t i = 0; i < frame_count; i+=fps_value) {
+            auto start_time = std::chrono::high_resolution_clock::now();
+            if (!vidObj.read(image)) break;
+            std::string frame = doProcess(image);
+            if (!frame.empty()) {
+                std::lock_guard<std::mutex> lock(frames_mutex);
+                frames.push_back(frame);
+            }
+            for (int j = 1; j < fps_value; ++j) {
+                if (!vidObj.grab()) break;
+            }
+            auto end_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed_time = end_time - start_time;
+            fprintf(fp, "frame = %ld, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(), frame.size());
+
+        }
+        vidObj.release();
+    });
+    t.join();
+    if (sleep_value > 0) {
+        while (frames.size() < (frame_count / fps_value) / sleep_value) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
-    t.join();
+    system("clear");
     float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed;
-    std::cout << "FPS: " << fps << std::endl;
     sf::Music music;
-    if (!music.openFromFile("output.ogg")) {
+    if (!music.openFromFile("output.wav")) {
         std::cerr << "Error loading audio file" << std::endl;
         return -1;
     }
     music.setPitch(speed);
     system("clear");
-    std::cout << "Frame count: " << frame_count << std::endl;
-    std::cout << "FPS: " << fps << std::endl;
-    std::cout << "width: " << image.cols << " height: " << image.rows << std::endl;
-    std::cout << "Character count: " << frames[0].size() << std::endl;
-    std::cout << "All set...Press Enter to start the video" << std::endl;
-    std::cin.get();
     music.setVolume(volume);
     music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
-    std::thread display_thread([&frames, &start_time, fps](){
-        for (size_t i = 0; i < frames.size(); i++) {
+    std::thread display_thread([&frames, &start_time, &frames_mutex, fps, frame_count, &fp]() {
+        for (size_t i = 0; i < ((frame_count / fps_value) -2); ++i) {
             auto current_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> total_elapsed_time = current_time - start_time;
-            int expected_frame_index = static_cast<int>(total_elapsed_time.count() * fps);
-            while (i < expected_frame_index) {
-                if (i >= frames.size()) break;
-                i++; // Skip frames if behind
+            std::chrono::duration<double> elapsed_time = current_time - start_time;
+            int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
+            while (i < expected_frame_index && i < (frame_count / fps_value) && i < frames.size()) {
+                ++i;
             }
             auto frame_start_time = std::chrono::high_resolution_clock::now();
-            write(STDOUT_FILENO, frames[i].c_str(), strlen(frames[i].c_str()));
+            {
+                if (i < frames.size() && !frames[i].empty()) {
+                    write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
+
+                } else {
+                    fprintf(fp, "frame = %ld, frames.size() = %ld\n", i, frames.size());
+                }
+            }
             auto frame_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
             double sleep_time = (1.0 / fps) - processing_time.count();
             if (sleep_time > 0) {
+                std::lock_guard<std::mutex> lock(frames_mutex);
+                auto frame_clear_start = std::chrono::high_resolution_clock::now();
+                frames[i].clear();
+                frames[i].shrink_to_fit();
+                auto frame_clear_end_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
+                sleep_time -= frame_clear_time.count();
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
+            fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
         }
     });
     display_thread.join();
-    
-    std::cout << "Video completed" << std::endl;
+    cv_thred.join();
     music.stop();
-    
+    system("clear");
+    printf("end_display\n");
+    fprintf(fp, "end\n");
+    fclose(fp);
     return 0;
 }
