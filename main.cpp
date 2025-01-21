@@ -2,10 +2,11 @@
 #include <vector>
 #include <string>
 #include <unistd.h>
+#include <fstream>  // ファイル出力のために必要
 #include <opencv2/opencv.hpp>
 
-const std::vector<std::string> GRADIENT_CHARS = {"█", "▓", "▒", "░", " "};
-const int HEIGHT = 130; // 画像の高さ
+const int HEIGHT = 5; // 画像の高さ
+const std::string FILENAME = "image.png"; // 画像ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -17,29 +18,29 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     return resized_image;
 }
 
-
-std::string modify(const cv::Mat& image, int buckets = 25) {
-    std::string new_pixels;
-    new_pixels += "\033[H\033[J";
-    new_pixels.reserve(image.rows * image.cols * 13); // Pre-allocate memory
-    for (int i = 0; i < image.rows; i++) {
-        for (int j = 0; j < image.cols; j++) {
-            cv::Vec3b pixel = image.at<cv::Vec3b>(i, j);
-            int blue = pixel[0];
-            int green = pixel[1];
-            int red = pixel[2];
-            int gray = (red + green + blue) / 3;
-            int color_index = gray / buckets;
-            if (color_index >= GRADIENT_CHARS.size()) {
-                color_index = GRADIENT_CHARS.size() - 1; // Ensure the index is within bounds
-            }            
-            new_pixels += "\033[38;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
-                          "\033[48;2;" + std::to_string(red) + ";" + std::to_string(green) + ";" + std::to_string(blue) + "m" +
-                          GRADIENT_CHARS[color_index];
+std::string modify(const cv::Mat& image) {
+    std::ostringstream oss;// 文字列を結合するためのストリーム 
+    oss << "/033[H";// カーソルを画面の左上に移動
+    int prev_red = -1, prev_green = -1, prev_blue = -1;// 前回の色情報
+    for (int i = 0; i < image.rows; ++i) {// 画像の行を走査
+        const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(i);// 行の先頭のポインタを取得
+        for (int j = 0; j < image.cols; ++j) {// 画像の列を走査
+            const cv::Vec3b& pixel = row_ptr[j];// 画素値を取得
+            int quantized_red = (pixel[2] / 3) * 3;// 赤成分を量子化
+            int quantized_green = (pixel[1] / 3) * 3;// 緑成分を量子化
+            int quantized_blue = (pixel[0] / 3) * 3;// 青成分を量子化
+            if (quantized_red != prev_red || quantized_green != prev_green || quantized_blue != prev_blue) {// 色情報が変わった場合
+                oss << "/033[48;2;" << quantized_red << ";" << quantized_green << ";" << quantized_blue << "m";// 文字色を変更
+                prev_red = quantized_red;// 色情報を更新
+                prev_green = quantized_green;// 色情報を更新
+                prev_blue = quantized_blue;//   色情報を更新
+            }
+            oss << " ";// 文字
         }
-        new_pixels += "\n";
+        oss << "/n";// 改行
     }
-    return new_pixels + "\033[0m"; // Reset color at the end
+    oss << "/033[0m";// 文字色をリセット
+    return oss.str();
 }
 
 std::string doProcess(const cv::Mat& image) {
@@ -48,18 +49,22 @@ std::string doProcess(const cv::Mat& image) {
 }
 
 int main() {
-    const std::string FILENAME = "image.JPG"; // 画像ファイル名
     cv::Mat image = cv::imread(FILENAME);
-
     if (image.empty()) {
         std::cerr << "Error: Could not open or find the image" << std::endl;
         return -1;
     }
-
     std::string frame = doProcess(image);
+    std::ofstream file("dataaa.txt", std::ios::out);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open the file for writing" << std::endl;
+        return -1;
+    }
+    
+    file << frame;
+    file.close();
     system("clear");
     write(STDOUT_FILENO, frame.c_str(), frame.size());
-    std::cout << "Image displayed" << std::endl;
     
     return 0;
 }
