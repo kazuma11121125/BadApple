@@ -88,9 +88,10 @@ int main() {
     auto start_time = std::chrono::high_resolution_clock::now();
     // カメラからfpsを取得
     std::thread display_thread([&frames, &start_time, &frames_mutex, &fps,&fp]() {
-        double sleep = 1.0 / fps * 2;
+        //500ms待機
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        double sleep = 1.0 / fps;
         int i = 0;
-        std::this_thread::sleep_for(std::chrono::seconds(10));
         while (true) {
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             auto current_time = std::chrono::high_resolution_clock::now();
@@ -101,7 +102,7 @@ int main() {
                     write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
 
                 } else {
-                    fprintf(fp, "frame = %ld, frames.size() = %ld\n", i, frames.size());
+                    fprintf(fp, "frame = %d, frames.size() = %ld\n", i, frames.size());
                 }
             }
             auto frame_end_time = std::chrono::high_resolution_clock::now();
@@ -116,7 +117,7 @@ int main() {
                 std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
                 sleep_time -= frame_clear_time.count();
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
-                fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
+                fprintf(fp, "display_frame = %d, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
             }
             i++;
         }
