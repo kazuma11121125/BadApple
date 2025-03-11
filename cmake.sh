@@ -3,8 +3,12 @@
 echo "${ART}"
 
 PROJECT_DIR="$PWD"
-
 BUILD_DIR="$PROJECT_DIR/build"
+
+# ビルドタイプを引数から取得（デフォルト: Release）
+BUILD_TYPE="${1:-Release}"
+
+echo "Build type: $BUILD_TYPE"
 
 if [ -d "$BUILD_DIR" ]; then
     echo "Cleaning up old build directory..."
@@ -12,7 +16,7 @@ if [ -d "$BUILD_DIR" ]; then
 fi
 
 echo "Running CMake..."
-cmake -G Ninja -B "$BUILD_DIR" "$PROJECT_DIR" -DCMAKE_BUILD_TYPE=Debug
+cmake -G Ninja -B "$BUILD_DIR" "$PROJECT_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
 
 cd "$BUILD_DIR" || exit
 

@@ -10,18 +10,19 @@
 #include <sstream>
 #include <mutex>
 
-constexpr float volume = 70.0f;
+constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
 constexpr int fps_value = 1;
 constexpr int HEIGHT = 251; // 画像の高さ
-constexpr float sleep_value = 5; //待機時間
-const std::string FILENAME = "yo.mp4"; // 動画ファイル名
+// constexpr int HEIGHT = 123; // 画像の高さ
+constexpr float sleep_value = -1; //待機時間
+const std::string FILENAME = "gunzyou.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
     int old_height = image.rows;
     float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 2.76);
+    int new_width = static_cast<int>(aspect_ratio * new_height * 2.76);//2.76
     cv::Mat resized_image;
     cv::resize(image, resized_image, cv::Size(new_width, new_height));
     return resized_image;
@@ -52,11 +53,6 @@ std::string modify(const cv::Mat& image) {
     return oss.str();
 }
 
-std::string doProcess(const cv::Mat& image) {
-    cv::Mat resized_image = resize(image);
-    return modify(resized_image);
-}
-
 int main() {
     std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.wav";
     std::thread t([&commands](){
@@ -79,13 +75,11 @@ int main() {
         for (size_t i = 0; i < frame_count; i += fps_value) {
             auto start_time = std::chrono::high_resolution_clock::now();
             if (!vidObj.read(image)) break;
-            std::string frame = doProcess(image);
+            cv::Mat resized_image = resize(image);
+            std::string frame = modify(resized_image);
             if (!frame.empty()) {
                 std::lock_guard<std::mutex> lock(frames_mutex);
                 frames.push_back(frame);
-            }
-            for (int j = 1; j < fps_value; j++) {
-                if (!vidObj.grab()) break;
             }
             auto end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = end_time - start_time;
@@ -113,14 +107,16 @@ int main() {
     music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
     std::thread display_thread([&frames, &start_time, &frames_mutex, fps, frame_count, &fp]() {
-        for (size_t i = 0; i < ((frame_count / fps_value) -2); ++i) {
+        int max_frame = frame_count / fps_value - 2;
+        double sleep = 1.0 / fps;
+        for (size_t i = 0; i < max_frame; ++i) {
+            auto frame_start_time = std::chrono::high_resolution_clock::now();
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
             while (i < expected_frame_index && i < (frame_count / fps_value) && i < frames.size()) {
                 ++i;
             }
-            auto frame_start_time = std::chrono::high_resolution_clock::now();
             {
                 if (i < frames.size() && !frames[i].empty()) {
                     write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
@@ -131,7 +127,7 @@ int main() {
             }
             auto frame_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
-            double sleep_time = (1.0 / fps) - processing_time.count();
+            double sleep_time = sleep - processing_time.count();
             if (sleep_time > 0) {
                 std::lock_guard<std::mutex> lock(frames_mutex);
                 auto frame_clear_start = std::chrono::high_resolution_clock::now();
@@ -141,8 +137,8 @@ int main() {
                 std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
                 sleep_time -= frame_clear_time.count();
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
+                fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
             }
-            fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
         }
     });
 
