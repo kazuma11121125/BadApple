@@ -9,12 +9,8 @@
 #include <chrono>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
-constexpr float volume = 80.0f;
-constexpr float speed = 1.0f;
-constexpr int HEIGHT = 250;
+constexpr int HEIGHT = 135;
 constexpr int fps_value = 1;
-constexpr int sleep_value = -1;
-const std::string FILENAME = "rak.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -26,7 +22,7 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image, double alpha = 1, int beta = 0) {
+cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.75, int beta = 0) {
     /*
     alpha: contrast control [1.0-3.0]
     beta: brightness control [0-100]
@@ -58,75 +54,51 @@ std::string doProcess(const cv::Mat& image) {
 }
 
 int main() {
-    cv::VideoCapture vidObj(FILENAME);
-    if (!vidObj.isOpened()) {
-        std::cerr << "Error: Could not open file" << std::endl;
-        return -1;
-    }
-    std::ios_base::sync_with_stdio(false);
-    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.wav";
-    std::thread t([&commands](){
-        system(commands.c_str());
-    });
-    
+    //camera
+    cv::VideoCapture vidObj(0);
     std::vector<std::string> frames;
     std::mutex frames_mutex;
-    int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
     FILE *fp;
     fp = fopen("output.txt", "w");
-    std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp](){
-        for (size_t i = 0; i < frame_count; i+=fps_value) {
+    std::thread cv_thred([&frames, &vidObj, &image, &frames_mutex, &fp](){
+        int i = 0;
+        while(true) {
             auto start_time = std::chrono::high_resolution_clock::now();
-            if (!vidObj.read(image)) break;
-            std::string frame = doProcess(image);
-            if (!frame.empty()) {
-                std::lock_guard<std::mutex> lock(frames_mutex);
-                frames.push_back(frame);
+            if (vidObj.read(image)){
+                std::string frame = doProcess(image);
+                if (!frame.empty()) {
+                    std::lock_guard<std::mutex> lock(frames_mutex);
+                    frames.push_back(frame);
+                }
+                auto end_time = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> elapsed_time = end_time - start_time;
+                fprintf(fp, "frame = %d, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(), frame.size());
+                i++;
             }
-            for (int j = 1; j < fps_value; ++j) {
-                if (!vidObj.grab()) break;
-            }
-            auto end_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed_time = end_time - start_time;
-            fprintf(fp, "frame = %ld, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(), frame.size());
-
         }
         vidObj.release();
     });
-    t.join();
-    if (sleep_value > 0) {
-        while (frames.size() < (frame_count / fps_value) / sleep_value) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
     system("clear");
-    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed;
-    sf::Music music;
-    if (!music.openFromFile("output.wav")) {
-        std::cerr << "Error loading audio file" << std::endl;
-        return -1;
-    }
-    music.setPitch(speed);
+    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value;
     system("clear");
-    music.setVolume(volume);
-    music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
-    std::thread display_thread([&frames, &start_time, &frames_mutex, fps, frame_count, &fp]() {
-        for (size_t i = 0; i < ((frame_count / fps_value) -2); ++i) {
+    std::thread display_thread([&frames, &start_time, &frames_mutex, fps, &fp]() {
+        int i = 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        while (true) {
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
-            while (i < expected_frame_index && i < (frame_count / fps_value) && i < frames.size()) {
-                ++i;
-            }
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             {
                 if (i < frames.size() && !frames[i].empty()) {
                     write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
 
+
                 } else {
-                    fprintf(fp, "frame = %ld, frames.size() = %ld\n", i, frames.size());
+                    fprintf(fp, "frame = %d, frames.size() = %ld\n", i, frames.size());
+                    i--;
                 }
             }
             auto frame_end_time = std::chrono::high_resolution_clock::now();
@@ -142,12 +114,12 @@ int main() {
                 sleep_time -= frame_clear_time.count();
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
-            fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
+            fprintf(fp, "display_frame = %d, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
+            i++;
         }
     });
     display_thread.join();
     cv_thred.join();
-    music.stop();
     system("clear");
     printf("end_display\n");
     fprintf(fp, "end\n");
