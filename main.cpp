@@ -16,7 +16,7 @@ constexpr int fps_value = 1;
 constexpr int HEIGHT = 251; // 画像の高さ
 // constexpr int HEIGHT = 123; // 画像の高さ
 constexpr float sleep_value = -1; //待機時間
-const std::string FILENAME = "gunzyou.mp4"; // 動画ファイル名
+const std::string FILENAME = "over.webm"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -28,29 +28,49 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     return resized_image;
 }
 
-std::string modify(const cv::Mat& image) {
+void processRow(const cv::Mat& image, int row, std::vector<std::string>& output, std::mutex& mutex) {
     std::ostringstream oss;
-    oss << "\033[H";
+    const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(row);
     int prev_red = -1, prev_green = -1, prev_blue = -1;
-    for (int i = 0; i < image.rows; ++i) {
-        const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(i);
-        for (int j = 0; j < image.cols; ++j) {
-            const cv::Vec3b& pixel = row_ptr[j];
-            int quantized_red = (pixel[2] / 3) * 3;
-            int quantized_green = (pixel[1] / 3) * 3;
-            int quantized_blue = (pixel[0] / 3) * 3;
-            if (quantized_red != prev_red || quantized_green != prev_green || quantized_blue != prev_blue) {
-                oss << "\033[48;2;" << quantized_red << ";" << quantized_green << ";" << quantized_blue << "m";
-                prev_red = quantized_red;
-                prev_green = quantized_green;
-                prev_blue = quantized_blue;
-            }
-            oss << " ";
+    for (int j = 0; j < image.cols; ++j) {
+        const cv::Vec3b& pixel = row_ptr[j];
+        int quantized_red = (pixel[2] / 3) * 3;
+        int quantized_green = (pixel[1] / 3) * 3;
+        int quantized_blue = (pixel[0] / 3) * 3;
+        if (quantized_red != prev_red || quantized_green != prev_green || quantized_blue != prev_blue) {
+            oss << "\033[48;2;" << quantized_red << ";" << quantized_green << ";" << quantized_blue << "m";
+            prev_red = quantized_red;
+            prev_green = quantized_green;
+            prev_blue = quantized_blue;
         }
-        oss << "\n";
+        oss << " ";
     }
-    oss << "\033[0m";
-    return oss.str();
+    oss << "\n";
+    
+    std::lock_guard<std::mutex> lock(mutex);
+    output[row] = oss.str();
+}
+
+std::string modify(const cv::Mat& image) {
+    std::vector<std::string> output(image.rows);
+    std::vector<std::thread> threads;
+    std::mutex mutex;
+    
+    for (int i = 0; i < image.rows; ++i) {
+        threads.emplace_back(processRow, std::cref(image), i, std::ref(output), std::ref(mutex));
+    }
+    
+    for (auto& t : threads) {
+        t.join();
+    }
+    
+    std::ostringstream final_output;
+    final_output << "\033[H";
+    for (const auto& line : output) {
+        final_output << line;
+    }
+    final_output << "\033[0m";
+    return final_output.str();
 }
 
 int main() {
@@ -136,8 +156,8 @@ int main() {
                 auto frame_clear_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
                 sleep_time -= frame_clear_time.count();
-                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
                 fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
+                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
         }
     });
