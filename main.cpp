@@ -13,8 +13,8 @@ constexpr float volume = 80.0f;
 constexpr float speed = 1.0f;
 constexpr int HEIGHT = 250;
 constexpr int fps_value = 1;
-constexpr int sleep_value = -1;
-const std::string FILENAME = "rak.mp4"; // 動画ファイル名
+constexpr int sleep_value = 2;
+const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -38,17 +38,41 @@ cv::Mat grayscalify(const cv::Mat& image, double alpha = 1, int beta = 0) {
     return adjusted_image;
 }
 
-std::string modify(const cv::Mat& image, int buckets = 25) {
+
+void processRow(const cv::Mat& image, int row, std::vector<std::string>& output, std::mutex& mutex, int buckets = 25) {
     std::ostringstream oss;
-    oss << "\033[H";\
+    const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(row);
+    for (int i = 0; i < image.cols; ++i) {
+        cv::Vec3b pixel = row_ptr[i];
+        int pixel_value = image.at<uchar>(row, i);
+        oss << ASCII_CHARS[pixel_value / buckets];
+    }    
+    oss << "\n";
+    
+    std::lock_guard<std::mutex> lock(mutex);
+    output[row] = oss.str();
+}
+
+std::string modify(const cv::Mat& image) {
+    std::vector<std::string> output(image.rows);
+    std::vector<std::thread> threads;
+    std::mutex mutex;
+    
     for (int i = 0; i < image.rows; ++i) {
-        for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = image.at<uchar>(i, j);
-            oss << ASCII_CHARS[pixel_value / buckets];
-        }
-        oss << '\n';
+        threads.emplace_back(processRow, std::cref(image), i, std::ref(output), std::ref(mutex), 25);
     }
-    return oss.str();
+    
+    for (auto& t : threads) {
+        t.join();
+    }
+    
+    std::ostringstream final_output;
+    final_output << "\033[H";
+    for (const auto& line : output) {
+        final_output << line;
+    }
+    final_output << "\033[0m";
+    return final_output.str();
 }
 
 std::string doProcess(const cv::Mat& image) {
@@ -140,9 +164,9 @@ int main() {
                 auto frame_clear_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
                 sleep_time -= frame_clear_time.count();
+                fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }
-            fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i);
         }
     });
     display_thread.join();
