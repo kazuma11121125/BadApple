@@ -12,7 +12,6 @@
 
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
-constexpr int fps_value = 1;
 constexpr int HEIGHT = 251; // 画像の高さ
 // constexpr int HEIGHT = 123; // 画像の高さ
 constexpr float sleep_value = -1; //待機時間
@@ -92,7 +91,7 @@ int main() {
     FILE *fp;
     fp = fopen("output.txt", "w");
     std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp](){
-        for (size_t i = 0; i < frame_count; i += fps_value) {
+        for (size_t i = 0; i < frame_count; ++i) {
             auto start_time = std::chrono::high_resolution_clock::now();
             if (!vidObj.read(image)) break;
             cv::Mat resized_image = resize(image);
@@ -111,12 +110,12 @@ int main() {
 
     t.join();
     if (sleep_value > 0) {
-        while (frames.size() < (frame_count / fps_value) / sleep_value) {
+        while (frames.size() < frame_count / sleep_value) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
     system("clear");
-    float fps = vidObj.get(cv::CAP_PROP_FPS) / fps_value * speed;
+    float fps = vidObj.get(cv::CAP_PROP_FPS) * speed;
     sf::Music music;
     if (!music.openFromFile("output.wav")) {
         std::cerr << "Error loading audio file" << std::endl;
@@ -127,14 +126,14 @@ int main() {
     music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
     std::thread display_thread([&frames, &start_time, &frames_mutex, fps, frame_count, &fp]() {
-        int max_frame = frame_count / fps_value - 2;
+        int max_frame = frame_count - 2;
         double sleep = 1.0 / fps;
         for (size_t i = 0; i < max_frame; ++i) {
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = current_time - start_time;
             int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
-            while (i < expected_frame_index && i < (frame_count / fps_value) && i < frames.size()) {
+            while (i < expected_frame_index && i < frame_count && i < frames.size()) {
                 ++i;
             }
             {
