@@ -14,3 +14,4 @@ myenv
 *.pyc
 *wav
 *mp3
+*.png
