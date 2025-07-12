@@ -9,6 +9,7 @@
 #include <chrono>
 #include <sstream>
 #include <mutex>
+#include <omp.h>
 #include <atomic>
 
 constexpr float volume = 30.0f;
@@ -16,57 +17,56 @@ constexpr float speed = 1.0f;
 // constexpr int HEIGHT = 251; // 画像の高さ
 constexpr int HEIGHT = 303; // 画像の高さ
 // constexpr int HEIGHT = 123; // 画像の高さ
-constexpr float sleep_value = 1.5;//待機時間
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+constexpr float sleep_value = -1;//待機時間
+const std::string FILENAME = "yo.mp4"; // 動画ファイル名
 
-cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
-    int old_width = image.cols;
-    int old_height = image.rows;
-    float aspect_ratio = static_cast<float>(old_width) / static_cast<float>(old_height);
-    int new_width = static_cast<int>(aspect_ratio * new_height * 2.56);//2.76 2.56
+const bool is_debug = false; // デバッグモード
+
+inline cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
+    const float scale    = static_cast<float>(new_height) / image.rows;
+    const int   new_width = static_cast<int>(image.cols * scale * 2.56f); // 2.76f
     cv::Mat resized_image;
-    cv::resize(image, resized_image, cv::Size(new_width, new_height));
+    resized_image.create(new_height, new_width, image.type());
+    cv::resize(image,resized_image,resized_image.size(),0, 0,cv::INTER_NEAREST);
     return resized_image;
 }
 
-const std::array<uint8_t, 256> make_quant_table() {
+inline constexpr std::array<uint8_t, 256> make_quant_table() {
     std::array<uint8_t, 256> table{};
     for (int i = 0; i < 256; ++i) {
-        table[i] = static_cast<uint8_t>((i / 5) * 5);
+        table[i] = static_cast<uint8_t>(i - (i % 5));
     }
     return table;
 }
 
 void processRow(const cv::Mat& image, int row, std::vector<std::string>& output) {
-    static const auto quant_table = make_quant_table();
-    std::ostringstream oss;
+    static const std::array<uint8_t, 256> quant_table = make_quant_table();
     const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(row);
+    std::string line;
+    line.reserve(image.cols * 8);  // ANSI コードと空白を含めた概算
     int prev_r = -1, prev_g = -1, prev_b = -1;
-    std::string color_code;
+    char buf[32];
     for (int j = 0; j < image.cols; ++j) {
-        const cv::Vec3b& pixel = row_ptr[j];
-        int r = quant_table[pixel[2]];
-        int g = quant_table[pixel[1]];
-        int b = quant_table[pixel[0]];
+        const auto& px = row_ptr[j];
+        int r = quant_table[px[2]];
+        int g = quant_table[px[1]];
+        int b = quant_table[px[0]];
         if (r != prev_r || g != prev_g || b != prev_b) {
-            color_code = "\033[48;2;" + std::to_string(r) + ";" + std::to_string(g) + ";" + std::to_string(b) + "m";
-            oss << color_code;
+            int len = std::snprintf(buf, sizeof(buf), "\033[48;2;%d;%d;%dm", r, g, b);
+            line.append(buf, len);
             prev_r = r; prev_g = g; prev_b = b;
         }
-        oss << " ";
+        line.push_back(' ');
     }
-    oss << "\n";
-    output[row] = oss.str();
+    line.push_back('\n');
+    output[row] = std::move(line);
 }
 
 std::string modify(const cv::Mat& image) {
     std::vector<std::string> output(image.rows);
-    std::vector<std::thread> threads;
+    #pragma omp parallel for
     for (int i = 0; i < image.rows; ++i) {
-        threads.emplace_back(processRow, std::cref(image), i, std::ref(output));
-    }
-    for (auto& t : threads) {
-        t.join();
+        processRow(std::cref(image), i, std::ref(output));
     }
     std::ostringstream final_output;
     final_output << "\033[H";
@@ -88,7 +88,8 @@ int main() {
         std::cerr << "Error: Could not open file" << std::endl;
         return -1;
     }
-    std::vector<std::string> frames;    
+    std::vector<std::string> frames;
+    frames.reserve(static_cast<size_t>(vidObj.get(cv::CAP_PROP_FRAME_COUNT)));    
     std::mutex frames_mutex;
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
@@ -106,10 +107,14 @@ int main() {
             }
             auto end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = end_time - start_time;
-            fprintf(fp, "frame = %ld, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(),frame.size());
+            if (is_debug){
+                fprintf(fp, "frame = %ld, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(),frame.size());
+            }
         }
         vidObj.release();
-        fprintf(fp, "end_cv2\n");
+        if (is_debug){
+            fprintf(fp, "end_cv2\n");
+        }
     });
 
     t.join();
@@ -163,7 +168,7 @@ int main() {
                     write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
 
                 } else {
-                    fprintf(fp, "frame = %ld, frames.size() = %ld\n", i, frames.size());
+                    fprintf(fp, "[WARNING] frame = %ld, frames.size() = %ld\n", i, frames.size());
                 }
             }
             auto frame_end_time = std::chrono::high_resolution_clock::now();
@@ -178,10 +183,12 @@ int main() {
                 auto frame_clear_end_time = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
                 sleep_time -= frame_clear_time.count();
-                fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frame_size);
+                if (is_debug){
+                    fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frame_size);
+                }
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }else{
-                fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frames[i].size());
+                fprintf(fp, "[WARNING] display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frames[i].size());
             }
         }
     });
