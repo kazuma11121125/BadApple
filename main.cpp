@@ -15,12 +15,12 @@
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
 // constexpr int HEIGHT = 251; // 画像の高さ
-constexpr int HEIGHT = 303; // 画像の高さ
+constexpr int HEIGHT = 353; // 画像の高さ
 // constexpr int HEIGHT = 123; // 画像の高さ
-constexpr float sleep_value = -1;//待機時間
-const std::string FILENAME = "yo.mp4"; // 動画ファイル名
+constexpr float sleep_value = 10;//待機時間
+const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
-const bool is_debug = false; // デバッグモード
+const bool is_debug = true; // デバッグモード
 
 inline cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     const float scale    = static_cast<float>(new_height) / image.rows;
@@ -132,36 +132,19 @@ int main() {
     }
     music.setPitch(speed);
     music.setVolume(volume);
-    music.play();
     auto start_time = std::chrono::high_resolution_clock::now();
+    music.play();
     
-    // フレーム同期用の変数
-    std::atomic<size_t> current_frame_index{0};
-    std::mutex sync_mutex;
-    
-    // フレーム同期スレッド
-    std::thread sync_thread([&current_frame_index, &start_time, fps, frame_count, &fp]() {
-        while (current_frame_index.load() < static_cast<size_t>(frame_count - 2)) {
-            auto current_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> elapsed_time = current_time - start_time;
-            size_t expected_frame_index = static_cast<size_t>(elapsed_time.count() * fps);
-            size_t current_val = current_frame_index.load();
-            if (expected_frame_index > current_val) {
-                current_frame_index.store(std::min(expected_frame_index, static_cast<size_t>(frame_count - 2)));
-            }
-        }
-    });
-    
-    std::thread display_thread([&frames, &current_frame_index, &frames_mutex, fps, frame_count, &fp]() {
+    std::thread display_thread([&frames, &frames_mutex, fps, frame_count, &fp, &start_time]() {
         int max_frame = frame_count - 2;
         double sleep = 1.0 / fps;
-        size_t i = 0;
-        
-        for (; i < max_frame; ++i) {
-            auto frame_start_time = std::chrono::high_resolution_clock::now();            
-            size_t target_frame = current_frame_index.load();
-            if (i < target_frame && target_frame < frames.size()) {
-                i = target_frame;
+        for (size_t i = 0; i < max_frame; ++i) {
+            auto frame_start_time = std::chrono::high_resolution_clock::now();
+            auto current_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> elapsed_time = current_time - start_time;
+            int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
+            while (i < expected_frame_index && i < frame_count && i < frames.size()) {
+                ++i;
             }
             {
                 if (i < frames.size() && !frames[i].empty()) {
@@ -194,7 +177,6 @@ int main() {
     });
 
     display_thread.join();
-    sync_thread.join();
     cv_thred.join();
     music.stop();
     system("clear");
