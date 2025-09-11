@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "${ART}"
-
+mkdir -p build
 PROJECT_DIR="$PWD"
 BUILD_DIR="$PROJECT_DIR/build"
 
