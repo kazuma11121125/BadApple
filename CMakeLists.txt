@@ -7,12 +7,13 @@ project(Bad-Apple)
 find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
 find_package(SFML COMPONENTS audio REQUIRED)
+find_package(OpenMP REQUIRED)
 
 include_directories(${OpenCV_INCLUDE_DIRS})
 
 add_executable(Bad-Apple main.cpp)
 
-target_link_libraries(Bad-Apple ${OpenCV_LIBS} sfml-audio)
+target_link_libraries(Bad-Apple ${OpenCV_LIBS} sfml-audio OpenMP::OpenMP_CXX)
 
 # 最適化オプションの設定
 target_compile_options(Bad-Apple PRIVATE 
@@ -23,4 +24,5 @@ target_compile_options(Bad-Apple PRIVATE
     -flto 
     # -Wno-sign-compare
     -Wno-unused-result
+    -fopenmp
 )

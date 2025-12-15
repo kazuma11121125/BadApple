@@ -7,13 +7,14 @@
 #include <SFML/Audio.hpp>
 #include <thread>
 #include <chrono>
+#include <omp.h>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
 constexpr float volume = 80.0f;
 constexpr float speed = 1.0f;
-constexpr int HEIGHT = 250;
+constexpr int HEIGHT = 337;
 constexpr int fps_value = 1;
-constexpr int sleep_value = 2;
+constexpr int sleep_value = -1;
 const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
@@ -38,32 +39,19 @@ cv::Mat grayscalify(const cv::Mat& image, double alpha = 1, int beta = 0) {
     return adjusted_image;
 }
 
-
-void processRow(const cv::Mat& image, int row, std::vector<std::string>& output, std::mutex& mutex, int buckets = 25) {
-    std::ostringstream oss;
-    const cv::Vec3b* row_ptr = image.ptr<cv::Vec3b>(row);
-    for (int i = 0; i < image.cols; ++i) {
-        cv::Vec3b pixel = row_ptr[i];
-        int pixel_value = image.at<uchar>(row, i);
-        oss << ASCII_CHARS[pixel_value / buckets];
-    }    
-    oss << "\n";
-    
-    std::lock_guard<std::mutex> lock(mutex);
-    output[row] = oss.str();
-}
-
 std::string modify(const cv::Mat& image) {
     std::vector<std::string> output(image.rows);
-    std::vector<std::thread> threads;
-    std::mutex mutex;
     
+    #pragma omp parallel for
     for (int i = 0; i < image.rows; ++i) {
-        threads.emplace_back(processRow, std::cref(image), i, std::ref(output), std::ref(mutex), 25);
-    }
-    
-    for (auto& t : threads) {
-        t.join();
+        std::ostringstream oss;
+        const uchar* row_ptr = image.ptr<uchar>(i);
+        for (int j = 0; j < image.cols; ++j) {
+            int pixel_value = row_ptr[j];
+            oss << ASCII_CHARS[pixel_value / 25];
+        }
+        oss << "\n";
+        output[i] = oss.str();
     }
     
     std::ostringstream final_output;
