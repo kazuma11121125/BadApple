@@ -7,17 +7,17 @@
 #include <SFML/Audio.hpp>
 #include <thread>
 #include <chrono>
-#include <sstream>
 #include <mutex>
 #include <omp.h>
 #include <atomic>
+#include <fmt/format.h>
 
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
 // constexpr int HEIGHT = 251; // 画像の高さ
-constexpr int HEIGHT = 353; // 画像の高さ
+constexpr int HEIGHT = 300; // 画像の高さ
 // constexpr int HEIGHT = 123; // 画像の高さ
-constexpr float sleep_value = 10;//待機時間
+constexpr float sleep_value = -1;//待機時間
 const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
 
 const bool is_debug = true; // デバッグモード
@@ -68,12 +68,12 @@ std::string modify(const cv::Mat& image) {
     for (int i = 0; i < image.rows; ++i) {
         processRow(std::cref(image), i, std::ref(output));
     }
-    std::ostringstream final_output;
-    final_output << "\033[H";
+    fmt::memory_buffer final_output;
+    fmt::format_to(std::back_inserter(final_output), "\033[H");
     for (const auto& line : output) {
-        final_output << line;
+        fmt::format_to(std::back_inserter(final_output), "{}", line);
     }
-    return final_output.str();
+    return fmt::to_string(final_output);
 }
 
 int main() {
