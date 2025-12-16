@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <omp.h>
+#include <fmt/format.h>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
 constexpr float volume = 80.0f;
@@ -44,23 +45,23 @@ std::string modify(const cv::Mat& image) {
     
     #pragma omp parallel for
     for (int i = 0; i < image.rows; ++i) {
-        std::ostringstream oss;
+        fmt::memory_buffer buf;
         const uchar* row_ptr = image.ptr<uchar>(i);
         for (int j = 0; j < image.cols; ++j) {
             int pixel_value = row_ptr[j];
-            oss << ASCII_CHARS[pixel_value / 25];
+            fmt::format_to(std::back_inserter(buf), "{}", ASCII_CHARS[pixel_value / 25]);
         }
-        oss << "\n";
-        output[i] = oss.str();
+        fmt::format_to(std::back_inserter(buf), "\n");
+        output[i] = fmt::to_string(buf);
     }
     
-    std::ostringstream final_output;
-    final_output << "\033[H";
+    fmt::memory_buffer final_buf;
+    fmt::format_to(std::back_inserter(final_buf), "\033[H");
     for (const auto& line : output) {
-        final_output << line;
+        fmt::format_to(std::back_inserter(final_buf), "{}", line);
     }
-    final_output << "\033[0m";
-    return final_output.str();
+    fmt::format_to(std::back_inserter(final_buf), "\033[0m");
+    return fmt::to_string(final_buf);
 }
 
 std::string doProcess(const cv::Mat& image) {

@@ -8,12 +8,13 @@ find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
 find_package(SFML COMPONENTS audio REQUIRED)
 find_package(OpenMP REQUIRED)
+find_package(fmt REQUIRED)
 
 include_directories(${OpenCV_INCLUDE_DIRS})
 
 add_executable(Bad-Apple main.cpp)
 
-target_link_libraries(Bad-Apple ${OpenCV_LIBS} sfml-audio OpenMP::OpenMP_CXX)
+target_link_libraries(Bad-Apple ${OpenCV_LIBS} sfml-audio OpenMP::OpenMP_CXX fmt::fmt)
 
 # 最適化オプションの設定
 target_compile_options(Bad-Apple PRIVATE 
