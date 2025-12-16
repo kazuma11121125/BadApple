@@ -14,17 +14,17 @@
 
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
-// constexpr int HEIGHT = 251; // 画像の高さ
-constexpr int HEIGHT = 300; // 画像の高さ
+constexpr int HEIGHT = 251; // 画像の高さ
+// constexpr int HEIGHT = 330; // 画像の高さ
 // constexpr int HEIGHT = 123; // 画像の高さ
 constexpr float sleep_value = -1;//待機時間
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
 
-const bool is_debug = true; // デバッグモード
+const bool is_debug = false; // デバッグモード
 
 inline cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     const float scale    = static_cast<float>(new_height) / image.rows;
-    const int   new_width = static_cast<int>(image.cols * scale * 2.56f); // 2.76f
+    const int   new_width = static_cast<int>(image.cols * scale * 2.76f); // 2.76f
     cv::Mat resized_image;
     resized_image.create(new_height, new_width, image.type());
     cv::resize(image,resized_image,resized_image.size(),0, 0,cv::INTER_NEAREST);
@@ -95,7 +95,10 @@ int main() {
     cv::Mat image;
     FILE *fp;
     fp = fopen("output.txt", "w");
-    std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp](){
+    float fps = vidObj.get(cv::CAP_PROP_FPS) * speed;
+    std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp, fps](){
+        const double sleep = 1.0 / (fps * 1.25);
+        const int pass_time_count = 100;
         for (size_t i = 0; i < frame_count; ++i) {
             auto start_time = std::chrono::high_resolution_clock::now();
             if (!vidObj.read(image)) break;
@@ -107,8 +110,16 @@ int main() {
             }
             auto end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = end_time - start_time;
-            if (is_debug){
-                fprintf(fp, "frame = %ld, elapsed_time = %f,frame_size = %ld\n", i, elapsed_time.count(),frame.size());
+            double sleep_time = sleep - elapsed_time.count();
+            if (sleep_time > 0 && i > pass_time_count) {
+                std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
+                if (is_debug){
+                    fprintf(fp, "[INFO] process_frame = %ld, elapsed_time = %f, sleep_time = %f\n", i, elapsed_time.count(), sleep_time);
+                }
+            } else {
+                if(i > pass_time_count){
+                    fprintf(fp, "[WARNING] process_frame = %ld, elapsed_time = %f, sleep_time = %f\n", i, elapsed_time.count(), sleep_time);
+                }
             }
         }
         vidObj.release();
@@ -124,7 +135,6 @@ int main() {
         }
     }
     system("clear");
-    float fps = vidObj.get(cv::CAP_PROP_FPS) * speed;
     sf::Music music;
     if (!music.openFromFile("output.wav")) {
         std::cerr << "Error loading audio file" << std::endl;
@@ -167,10 +177,12 @@ int main() {
                 std::chrono::duration<double> frame_clear_time = frame_clear_end_time - frame_clear_start;
                 sleep_time -= frame_clear_time.count();
                 if (is_debug){
-                    fprintf(fp, "display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frame_size);
+                    fprintf(fp, "[INFO] display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frame_size);
                 }
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             }else{
+                // frames[i].clear();
+                // frames[i].shrink_to_fit();
                 fprintf(fp, "[WARNING] display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %d\n", i, processing_time.count(), sleep_time, frames.size() - i, frames[i].size());
             }
         }
