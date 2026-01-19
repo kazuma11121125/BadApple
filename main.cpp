@@ -14,9 +14,10 @@ const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩",
 constexpr float volume = 80.0f;
 constexpr float speed = 1.0f;
 constexpr int HEIGHT = 390;
+// constexpr int HEIGHT = 280;
 constexpr int fps_value = 1;
 constexpr int sleep_value = -1;
-const std::string FILENAME = "bad_apple.mp4"; // 動画ファイル名
+const std::string FILENAME = "bell.mp4"; // 動画ファイル名
 const bool is_debug = false; // デバッグモード
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
@@ -29,16 +30,24 @@ cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     return resized_image;
 }
 
-cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.3, int beta = 1) {
+cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.4, int beta = 1, bool reverse = true) {
     /*
     alpha: contrast control [1.0-3.0] // ある程度コントラストを強調
     beta: brightness control [0-100]　// 明るさの調整
+    reverse: trueなら白黒反転
     */
     cv::Mat gray_image;
-    cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
     cv::Mat adjusted_image;
+    cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
+    if (reverse) {
+        gray_image = 255 - gray_image;
+        gray_image.convertTo(adjusted_image, -1, alpha, beta);
+        return adjusted_image;
+    }else{
     gray_image.convertTo(adjusted_image, -1, alpha, beta);
-    return adjusted_image;
+        return adjusted_image;
+    }
+    return gray_image;
 }
 
 std::string modify(const cv::Mat& image) {
