@@ -17,7 +17,7 @@ constexpr int HEIGHT = 390;
 // constexpr int HEIGHT = 280;
 constexpr int fps_value = 1;
 constexpr int sleep_value = -1;
-const std::string FILENAME = "bell.mp4"; // 動画ファイル名
+const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
 const bool is_debug = false; // デバッグモード
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {

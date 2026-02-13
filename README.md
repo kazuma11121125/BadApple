@@ -26,13 +26,26 @@
 
 ## セットアップ
 
-1. リポジトリをクローン:
+### Ubuntu環境での完全な環境構築
+
+#### 1. システムパッケージの更新
 ```bash
-git clone <repository-url>
+sudo apt update
+sudo apt upgrade -y
+```
+
+#### 2. ビルドツール、開発ツール、全ライブラリのインストール
+```bash
+sudo apt install -y build-essential cmake ninja-build git libopencv-dev libsfml-dev libomp-dev libfmt-dev ffmpeg pkg-config
+```
+
+#### 3. リポジトリをクローン
+```bash
+git clone git@github.com:kazuma11121125/BadApple.git
 cd BadApple
 ```
 
-2. 動画ファイルを準備:
+#### 4. 動画ファイルを準備
 `bad_apple.mp4` という名前の動画ファイルをプロジェクトのルートディレクトリに配置してください。
 
 ## ビルド方法

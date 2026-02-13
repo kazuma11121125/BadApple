@@ -1,6 +1,7 @@
 build
 frames
 *.mp4
+!bad_apple.mp4
 .vscode
 *.webm
 video
