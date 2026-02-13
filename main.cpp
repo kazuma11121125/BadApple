@@ -39,7 +39,7 @@ int getTermWidth() {
 inline cv::Mat resize(const cv::Mat& image, int new_height, int new_width) {
     cv::Mat resized_image;
     resized_image.create(new_height, new_width, image.type());
-    cv::resize(image, resized_image, resized_image.size(), 0, 0, cv::INTER_NEAREST);
+    cv::resize(image, resized_image, resized_image.size(), 0, 0, cv::INTER_LINEAR);
     return resized_image;
 }
 
