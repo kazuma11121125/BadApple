@@ -1,31 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
 
 # CMakeポリシーを設定してCUDA警告を抑制
-cmake_policy(SET CMP0146 OLD)
-
-# 使用するコンパイラの指定
-set(CMAKE_CXX_COMPILER "g++")
-
-# プロジェクト名の設定
-project(Bad-Apple)
-
-# CUDAを明示的に無効にする
-set(WITH_CUDA OFF CACHE BOOL "Disable CUDA" FORCE)
-set(OpenCV_FIND_QUIETLY ON)
-
-# OpenCVのCUDA検索も無効にする
-set(OpenCV_FIND_CUDA OFF CACHE BOOL "Disable OpenCV CUDA search" FORCE)
-
-cmake_minimum_required(VERSION 3.18)
-
-# CMakeポリシーを設定してCUDA警告を抑制
-cmake_policy(SET CMP0146 OLD)
-
-# プロジェクト名の設定
-project(Bad-Apple)
+# cmake_policy(SET CMP0146 OLD)
 
 # 使用するコンパイラの指定
 set(CMAKE_CXX_COMPILER "/usr/bin/g++")
+
+# プロジェクト名の設定
+project(Bad-Apple)
 
 # CUDAを明示的に無効にする
 set(WITH_CUDA OFF CACHE BOOL "Disable CUDA" FORCE)
