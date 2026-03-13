@@ -7,10 +7,13 @@
 #include <SFML/Audio.hpp>
 #include <thread>
 #include <chrono>
+#include <fmt/format.h>
+#include <omp.h>
 
 const std::vector<std::string> ASCII_CHARS = {"⣿", "⣾", "⣫", "⣪", "⣩", "⡶", "⠶", "⠖", "⠆", "⠄", " "};
 constexpr int HEIGHT = 135;
 constexpr int fps_value = 1;
+constexpr int NUM_THREADS = 8;  // OpenMP threads optimization
 
 cv::Mat resize(const cv::Mat& image, int new_height = HEIGHT) {
     int old_width = image.cols;
@@ -35,16 +38,38 @@ cv::Mat grayscalify(const cv::Mat& image, double alpha = 1.75, int beta = 0) {
 }
 
 std::string modify(const cv::Mat& image, int buckets = 25) {
-    std::ostringstream oss;
-    oss << "\033[H";\
+    std::vector<std::string> output(image.rows);
+    const int cols = image.cols;
+    
+    // Pre-allocate with estimated size (~utf8 chars ~3 bytes + newline)
+    #pragma omp parallel for num_threads(NUM_THREADS) schedule(static)
     for (int i = 0; i < image.rows; ++i) {
-        for (int j = 0; j < image.cols; ++j) {
-            int pixel_value = image.at<uchar>(i, j);
-            oss << ASCII_CHARS[pixel_value / buckets];
+        fmt::memory_buffer buf;
+        buf.reserve(cols * 4);  // Pre-allocate buffer
+        const uchar* row_ptr = image.ptr<uchar>(i);
+        for (int j = 0; j < cols; ++j) {
+            const uchar pixel_value = row_ptr[j];
+            fmt::format_to(std::back_inserter(buf), "{}", ASCII_CHARS[pixel_value / buckets]);
         }
-        oss << '\n';
+        fmt::format_to(std::back_inserter(buf), "\n");
+        output[i] = fmt::to_string(buf);
     }
-    return oss.str();
+    
+    // Calculate total output size for final buffer
+    size_t total_size = 4;  // "\033[H" = 4 bytes
+    for (const auto& line : output) {
+        total_size += line.size();
+    }
+    total_size += 4;  // "\033[0m" = 4 bytes
+    
+    fmt::memory_buffer final_buf;
+    final_buf.reserve(total_size);
+    fmt::format_to(std::back_inserter(final_buf), "\033[H");
+    for (const auto& line : output) {
+        fmt::format_to(std::back_inserter(final_buf), "{}", line);
+    }
+    fmt::format_to(std::back_inserter(final_buf), "\033[0m");
+    return fmt::to_string(final_buf);
 }
 
 std::string doProcess(const cv::Mat& image) {
@@ -54,6 +79,9 @@ std::string doProcess(const cv::Mat& image) {
 }
 
 int main() {
+    // Set OpenMP thread count
+    omp_set_num_threads(NUM_THREADS);
+    
     //camera
     cv::VideoCapture vidObj(0);
     std::vector<std::string> frames;
@@ -61,6 +89,8 @@ int main() {
     cv::Mat image;
     FILE *fp;
     fp = fopen("output.txt", "w");
+    setvbuf(fp, nullptr, _IOFBF, 65536);  // 64KB buffer for FILE*
+    
     std::thread cv_thred([&frames, &vidObj, &image, &frames_mutex, &fp](){
         int i = 0;
         while(true) {
