@@ -46,7 +46,7 @@ inline cv::Mat resize(const cv::Mat& image, int new_height, int new_width) {
 inline constexpr std::array<uint8_t, 256> make_quant_table() {
     std::array<uint8_t, 256> table{};
     for (int i = 0; i < 256; ++i) {
-        table[i] = static_cast<uint8_t>(i - (i % 8)); // 8刻みで量子化
+        table[i] = static_cast<uint8_t>(i - (i % 5)); // 5刻みで量子化
     }
     return table;
 }
