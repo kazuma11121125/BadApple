@@ -28,7 +28,16 @@ pkg_check_modules(OpenCV REQUIRED opencv4)
 find_package(Threads REQUIRED)
 find_package(SFML COMPONENTS audio REQUIRED)
 find_package(OpenMP REQUIRED)
-find_package(fmt REQUIRED)
+find_package(fmt CONFIG QUIET)
+if(NOT fmt_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+        fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG 11.1.3
+    )
+    FetchContent_MakeAvailable(fmt)
+endif()
 
 include_directories(${OpenCV_INCLUDE_DIRS})
 

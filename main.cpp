@@ -1,4 +1,7 @@
 #include <iostream>
+#include <algorithm>
+#include <array>
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <unistd.h>
@@ -7,10 +10,10 @@
 #include <SFML/Audio.hpp>
 #include <thread>
 #include <chrono>
-#include <mutex>
+#include <emmintrin.h>
 #include <omp.h>
 #include <atomic>
-#include <fmt/format.h>
+#include <fmt/core.h>
 #include <sys/ioctl.h>
 #include <sys/uio.h>
 
@@ -20,8 +23,60 @@ constexpr float sleep_value = -1;//待機時間
 const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
 constexpr float FONT_CORRECTION = 2.76f; // フォントアスペクト比補正
 constexpr int MAX_RENDER_WIDTH = 2000;   // 描画幅上限（ターミナル描画速度の限界）
+constexpr size_t FRAME_RING_CAPACITY = 1024; // SPSCリングバッファ容量
 
 const bool is_debug = false; // デバッグモード
+
+class SpscFrameRing {
+public:
+    explicit SpscFrameRing(size_t capacity)
+        : buf_(capacity), cap_(capacity) {}
+
+    void reserve_all(size_t bytes) {
+        for (auto& s : buf_) {
+            s.reserve(bytes);
+        }
+    }
+
+    bool try_push(std::string& item) {
+        const size_t head = head_.load(std::memory_order_relaxed);
+        const size_t next = inc(head);
+        if (next == tail_.load(std::memory_order_acquire)) {
+            return false; // full
+        }
+        buf_[head].swap(item);
+        head_.store(next, std::memory_order_release);
+        return true;
+    }
+
+    bool try_pop(std::string& out) {
+        const size_t tail = tail_.load(std::memory_order_relaxed);
+        if (tail == head_.load(std::memory_order_acquire)) {
+            return false; // empty
+        }
+        out.swap(buf_[tail]);
+        tail_.store(inc(tail), std::memory_order_release);
+        return true;
+    }
+
+    size_t size_approx() const {
+        const size_t head = head_.load(std::memory_order_acquire);
+        const size_t tail = tail_.load(std::memory_order_acquire);
+        return (head >= tail) ? (head - tail) : (cap_ - tail + head);
+    }
+
+private:
+    size_t inc(size_t idx) const {
+        ++idx;
+        if (idx == cap_) idx = 0;
+        return idx;
+    }
+
+    std::vector<std::string> buf_;
+    const size_t cap_;
+    alignas(64) std::atomic<size_t> head_{0};
+    alignas(64) std::atomic<size_t> tail_{0};
+};
 
 // ターミナルサイズを取得
 int getTermHeight() {
@@ -43,12 +98,37 @@ inline cv::Mat resize(const cv::Mat& image, int new_height, int new_width) {
     return resized_image;
 }
 
-inline constexpr std::array<uint8_t, 256> make_quant_table() {
-    std::array<uint8_t, 256> table{};
-    for (int i = 0; i < 256; ++i) {
-        table[i] = static_cast<uint8_t>(i - (i % 5)); // 5刻みで量子化
+inline uint8_t quantize_floor5_scalar(uint8_t x) {
+    return static_cast<uint8_t>(((x * 205u) >> 10) * 5u); // floor(x/5)*5 を除算なしで計算
+}
+
+// SIMDで1行分を5刻みに量子化（SSE2）
+inline void quantize_row_floor5_simd(const uint8_t* src, uint8_t* dst, size_t count) {
+    size_t i = 0;
+
+#if defined(__SSE2__)
+    const __m128i zero = _mm_setzero_si128();
+    const __m128i mul = _mm_set1_epi16(205);
+
+    for (; i + 16 <= count; i += 16) {
+        const __m128i x = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i));
+        __m128i lo = _mm_unpacklo_epi8(x, zero);
+        __m128i hi = _mm_unpackhi_epi8(x, zero);
+
+        lo = _mm_srli_epi16(_mm_mullo_epi16(lo, mul), 10);
+        hi = _mm_srli_epi16(_mm_mullo_epi16(hi, mul), 10);
+
+        lo = _mm_add_epi16(_mm_slli_epi16(lo, 2), lo); // *5
+        hi = _mm_add_epi16(_mm_slli_epi16(hi, 2), hi); // *5
+
+        const __m128i packed = _mm_packus_epi16(lo, hi);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(dst + i), packed);
     }
-    return table;
+#endif
+
+    for (; i < count; ++i) {
+        dst[i] = quantize_floor5_scalar(src[i]);
+    }
 }
 
 // 0〜255の整数を文字列化したルックアップテーブル（snprintf完全排除）
@@ -108,32 +188,44 @@ static const char HALF_BLOCK[] = "\xe2\x96\x80"; // UTF-8 for ▀ (3 bytes)
 
 void processHalfBlockRow(const cv::Mat& image, int out_row, int total_out_rows,
                          std::vector<std::string>& output) {
-    static const std::array<uint8_t, 256> quant_table = make_quant_table();
     const int src_row_top = out_row * 2;
     const int src_row_bot = src_row_top + 1;
     const bool has_bot = src_row_bot < image.rows;
     
     const cv::Vec3b* top_ptr = image.ptr<cv::Vec3b>(src_row_top);
     const cv::Vec3b* bot_ptr = has_bot ? image.ptr<cv::Vec3b>(src_row_bot) : nullptr;
+
+    const uint8_t* top_raw = reinterpret_cast<const uint8_t*>(top_ptr);
+    const uint8_t* bot_raw = has_bot ? reinterpret_cast<const uint8_t*>(bot_ptr) : nullptr;
+    const size_t row_bytes = static_cast<size_t>(image.cols) * 3;
+
+    thread_local std::vector<uint8_t> top_q;
+    thread_local std::vector<uint8_t> bot_q;
+    top_q.resize(row_bytes);
+    quantize_row_floor5_simd(top_raw, top_q.data(), row_bytes);
+
+    if (has_bot) {
+        bot_q.resize(row_bytes);
+        quantize_row_floor5_simd(bot_raw, bot_q.data(), row_bytes);
+    }
     
     std::string line;
-    line.reserve(image.cols * 10);
+    line.reserve(static_cast<size_t>(image.cols) * 20);
     
     int prev_fg_r = -1, prev_fg_g = -1, prev_fg_b = -1;
     int prev_bg_r = -1, prev_bg_g = -1, prev_bg_b = -1;
     
     for (int j = 0; j < image.cols; ++j) {
-        const auto& tp = top_ptr[j];
-        int fg_r = quant_table[tp[2]];
-        int fg_g = quant_table[tp[1]];
-        int fg_b = quant_table[tp[0]];
+        const int idx = j * 3;
+        int fg_b = top_q[idx + 0];
+        int fg_g = top_q[idx + 1];
+        int fg_r = top_q[idx + 2];
         
         int bg_r, bg_g, bg_b;
         if (has_bot) {
-            const auto& bp = bot_ptr[j];
-            bg_r = quant_table[bp[2]];
-            bg_g = quant_table[bp[1]];
-            bg_b = quant_table[bp[0]];
+            bg_b = bot_q[idx + 0];
+            bg_g = bot_q[idx + 1];
+            bg_r = bot_q[idx + 2];
         } else {
             bg_r = 0; bg_g = 0; bg_b = 0;
         }
@@ -173,7 +265,7 @@ void processHalfBlockRow(const cv::Mat& image, int out_row, int total_out_rows,
     output[out_row] = std::move(line);
 }
 
-std::string modify(const cv::Mat& image) {
+void modify(const cv::Mat& image, std::string& result) {
     const int out_rows = (image.rows + 1) / 2;
     std::vector<std::string> output(out_rows);
     
@@ -185,17 +277,16 @@ std::string modify(const cv::Mat& image) {
     size_t total = 3; // \033[H
     for (const auto& line : output) total += line.size();
     total += 4; // \033[0m
-    
-    std::string result;
+
+    result.clear();
     result.reserve(total);
     result.append("\033[H");
     for (const auto& line : output) result.append(line);
     result.append("\033[0m");
-    return result;
 }
 
 int main() {
-    std::string commands = "ffmpeg -y -i " + FILENAME + " -vn output.wav";
+    std::string commands = fmt::format("ffmpeg -y -i '{}' -vn output.wav", FILENAME);
     std::thread t([&commands](){
         system(commands.c_str());
     });
@@ -203,7 +294,7 @@ int main() {
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(nullptr);
     if (!vidObj.isOpened()) {
-        std::cerr << "Error: Could not open file" << std::endl;
+        fmt::print(stderr, "Error: Could not open file\n");
         return -1;
     }
     
@@ -229,32 +320,36 @@ int main() {
         target_h = display_rows * 2;
     }
     
-    fprintf(stderr, "Terminal: %dx%d, Render: %dx%d (display: %dx%d)\n", 
-            term_w, term_h + 1, target_w, target_h, target_w, (target_h + 1) / 2);
+    fmt::print(stderr, "Terminal: {}x{}, Render: {}x{} (display: {}x{})\n",
+               term_w, term_h + 1, target_w, target_h, target_w, (target_h + 1) / 2);
     
-    std::vector<std::string> frames;
-    frames.reserve(static_cast<size_t>(vidObj.get(cv::CAP_PROP_FRAME_COUNT)));    
-    std::mutex frames_mutex;
+    SpscFrameRing frame_ring(FRAME_RING_CAPACITY);
+    const size_t estimated_frame_bytes = static_cast<size_t>(target_w) * static_cast<size_t>((target_h + 1) / 2) * 14 + 16;
+    frame_ring.reserve_all(estimated_frame_bytes);
+    std::atomic<bool> producer_done{false};
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
     FILE *fp;
     fp = fopen("output.txt", "w");
     float fps = vidObj.get(cv::CAP_PROP_FPS) * speed;
     
-    fprintf(fp, "[CONFIG] term=%dx%d render=%dx%d display_rows=%d fps=%.1f\n",
-            term_w, term_h + 1, target_w, target_h, (target_h + 1) / 2, fps);
+    fmt::print(fp, "[CONFIG] term={}x{} render={}x{} display_rows={} fps={:.1f}\n",
+               term_w, term_h + 1, target_w, target_h, (target_h + 1) / 2, fps);
     
-    std::thread cv_thred([&frame_count, &frames, &vidObj, &image, &frames_mutex, &fp, fps, target_h, target_w](){
+    std::thread cv_thred([&frame_count, &frame_ring, &vidObj, &image, &producer_done, &fp, fps, target_h, target_w](){
         const double sleep = 1.0 / (fps * 1.25);
         const int pass_time_count = 100;
+        std::string frame;
+        frame.reserve(static_cast<size_t>(target_w) * static_cast<size_t>((target_h + 1) / 2) * 14 + 16);
         for (size_t i = 0; i < frame_count; ++i) {
             auto start_time = std::chrono::high_resolution_clock::now();
             if (!vidObj.read(image)) break;
             cv::Mat resized_image = resize(image, target_h, target_w);
-            std::string frame = modify(resized_image);
+            modify(resized_image, frame);
             if (!frame.empty()) {
-                std::lock_guard<std::mutex> lock(frames_mutex);
-                frames.push_back(std::move(frame));
+                while (!frame_ring.try_push(frame)) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                }
             }
             auto end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = end_time - start_time;
@@ -262,23 +357,25 @@ int main() {
             if (sleep_time > 0 && i > pass_time_count) {
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
                 if (is_debug){
-                    fprintf(fp, "[INFO] process_frame = %ld, elapsed_time = %f, sleep_time = %f\n", i, elapsed_time.count(), sleep_time);
+                    fmt::print(fp, "[INFO] process_frame = {}, elapsed_time = {:.6f}, sleep_time = {:.6f}\n", i, elapsed_time.count(), sleep_time);
                 }
             } else {
                 if(i > pass_time_count){
-                    fprintf(fp, "[WARNING] process_frame = %ld, elapsed_time = %f, sleep_time = %f\n", i, elapsed_time.count(), sleep_time);
+                    fmt::print(fp, "[WARNING] process_frame = {}, elapsed_time = {:.6f}, sleep_time = {:.6f}\n", i, elapsed_time.count(), sleep_time);
                 }
             }
         }
         vidObj.release();
+        producer_done.store(true, std::memory_order_release);
         if (is_debug){
-            fprintf(fp, "end_cv2\n");
+            fmt::print(fp, "end_cv2\n");
         }
     });
 
     t.join();
     if (sleep_value > 0) {
-        while (frames.size() < frame_count / sleep_value) {
+        const size_t prebuffer = static_cast<size_t>(frame_count / sleep_value);
+        while (frame_ring.size_approx() < prebuffer && !producer_done.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
@@ -291,7 +388,7 @@ int main() {
     fflush(stdout);
     sf::Music music;
     if (!music.openFromFile("output.wav")) {
-        std::cerr << "Error loading audio file" << std::endl;
+        fmt::print(stderr, "Error loading audio file\n");
         return -1;
     }
     music.setPitch(speed);
@@ -299,40 +396,56 @@ int main() {
     auto start_time = std::chrono::high_resolution_clock::now();
     music.play();
     
-    std::thread display_thread([&frames, &frames_mutex, fps, frame_count, &fp, &start_time]() {
-        int max_frame = frame_count - 2;
+    std::thread display_thread([&frame_ring, &producer_done, fps, frame_count, &fp, &start_time]() {
+        const int max_frame = frame_count - 2;
         double sleep = 1.0 / fps;
-        for (size_t i = 0; i < max_frame; ++i) {
+        size_t displayed = 0;
+        std::string frame;
+        std::string dropped;
+        while (displayed < static_cast<size_t>(max_frame)) {
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             auto current_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = current_time - start_time;
-            int expected_frame_index = static_cast<int>(elapsed_time.count() * fps);
-            while (i < expected_frame_index && i < frame_count && i < frames.size()) {
-                ++i;
-            }
-            {
-                if (i < frames.size() && !frames[i].empty()) {
-                    write(STDOUT_FILENO, frames[i].c_str(), frames[i].size());
-                } else {
-                    fprintf(fp, "[WARNING] frame = %ld, frames.size() = %ld\n", i, frames.size());
+            const size_t expected_frame_index = static_cast<size_t>(std::max(0, static_cast<int>(elapsed_time.count() * fps)));
+
+            size_t queue_depth_after_pop = 0;
+            while (displayed < expected_frame_index && frame_ring.size_approx() > 1) {
+                if (!frame_ring.try_pop(dropped)) {
+                    break;
                 }
+                ++displayed;
             }
+
+            while (!frame_ring.try_pop(frame)) {
+                if (producer_done.load(std::memory_order_acquire)) {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
+
+            if (frame.empty() && producer_done.load(std::memory_order_acquire)) {
+                break;
+            }
+
+            queue_depth_after_pop = frame_ring.size_approx();
+
+            if (!frame.empty()) {
+                write(STDOUT_FILENO, frame.c_str(), frame.size());
+            } else {
+                fmt::print(fp, "[WARNING] empty frame, queue_depth = {}\n", queue_depth_after_pop);
+            }
+
+            ++displayed;
             auto frame_end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> processing_time = frame_end_time - frame_start_time;
             double sleep_time = sleep - processing_time.count();
             if (sleep_time > 0) {
-                std::lock_guard<std::mutex> lock(frames_mutex);
-                size_t frame_size = frames[i].size();
-                frames[i].clear();
-                frames[i].shrink_to_fit();
                 if (is_debug){
-                    fprintf(fp, "[INFO] display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i, frame_size);
+                    fmt::print(fp, "[INFO] display_frame = {}, processing_time = {:.6f}, sleep_time = {:.6f}, queue_depth = {}\n", displayed, processing_time.count(), sleep_time, queue_depth_after_pop);
                 }
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             } else {
-                fprintf(fp, "[WARNING] display_frame = %ld, processing_time = %f, sleep_time = %f, frames.size - i = %ld, frame_size() = %ld\n", i, processing_time.count(), sleep_time, frames.size() - i, frames[i].size());
-                frames[i].clear();
-                frames[i].shrink_to_fit();
+                fmt::print(fp, "[WARNING] display_frame = {}, processing_time = {:.6f}, sleep_time = {:.6f}, queue_depth = {}\n", displayed, processing_time.count(), sleep_time, queue_depth_after_pop);
             }
         }
     });
@@ -346,8 +459,8 @@ int main() {
     printf("\033[0m");    // 色リセット
     fflush(stdout);
     system("clear");
-    printf("end_display\n");
-    fprintf(fp, "end\n");
+    fmt::print("end_display\n");
+    fmt::print(fp, "end\n");
     fclose(fp);
     return 0;
 }
