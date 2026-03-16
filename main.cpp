@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <string_view>
 #include <vector>
 #include <string>
 #include <unistd.h>
@@ -20,7 +22,7 @@
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
 constexpr float sleep_value = -1;//待機時間
-const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
+const std::string FILENAME = "bell.mp4"; // 動画ファイル名
 constexpr float FONT_CORRECTION = 2.76f; // フォントアスペクト比補正
 constexpr int MAX_RENDER_WIDTH = 2000;   // 描画幅上限（ターミナル描画速度の限界）
 constexpr size_t FRAME_RING_CAPACITY = 1024; // SPSCリングバッファ容量
@@ -155,6 +157,43 @@ struct IntToStr {
 };
 
 static constexpr IntToStr INT_STR{};
+
+inline void appendCursorMove(std::string& out, int row1based) {
+    out.append("\033[", 2);
+    if (row1based >= 0 && row1based <= 255) {
+        out.append(INT_STR.data[row1based], INT_STR.len[row1based]);
+    } else {
+        out.append(std::to_string(row1based));
+    }
+    out.append(";1H", 3);
+}
+
+inline void splitFrameRows(const std::string& frame, std::vector<std::string_view>& rows) {
+    rows.clear();
+    if (frame.empty()) return;
+
+    size_t start = 0;
+    size_t end = frame.size();
+
+    if (frame.size() >= 3 && frame.compare(0, 3, "\033[H") == 0) {
+        start = 3;
+    }
+    if (end >= 4 && frame.compare(end - 4, 4, "\033[0m") == 0) {
+        end -= 4;
+    }
+    if (start >= end) return;
+
+    size_t line_start = start;
+    for (size_t i = start; i < end; ++i) {
+        if (frame[i] == '\n') {
+            rows.emplace_back(frame.data() + line_start, i - line_start);
+            line_start = i + 1;
+        }
+    }
+    if (line_start <= end) {
+        rows.emplace_back(frame.data() + line_start, end - line_start);
+    }
+}
 
 // エスケープシーケンスを高速に組み立てる（snprintf不使用）
 inline void appendFgBg(std::string& line, int fg_r, int fg_g, int fg_b, int bg_r, int bg_g, int bg_b) {
@@ -396,12 +435,17 @@ int main() {
     auto start_time = std::chrono::high_resolution_clock::now();
     music.play();
     
-    std::thread display_thread([&frame_ring, &producer_done, fps, frame_count, &fp, &start_time]() {
+    std::thread display_thread([&frame_ring, &producer_done, fps, frame_count, display_rows, estimated_frame_bytes, &fp, &start_time]() {
         const int max_frame = frame_count - 2;
         double sleep = 1.0 / fps;
         size_t displayed = 0;
         std::string frame;
         std::string dropped;
+        std::vector<std::string> prev_rows(static_cast<size_t>(display_rows));
+        std::vector<std::string_view> cur_rows;
+        cur_rows.reserve(static_cast<size_t>(display_rows));
+        std::string patch;
+        patch.reserve(estimated_frame_bytes / 2);
         while (displayed < static_cast<size_t>(max_frame)) {
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             auto current_time = std::chrono::high_resolution_clock::now();
@@ -430,7 +474,39 @@ int main() {
             queue_depth_after_pop = frame_ring.size_approx();
 
             if (!frame.empty()) {
-                write(STDOUT_FILENO, frame.c_str(), frame.size());
+                splitFrameRows(frame, cur_rows);
+                patch.clear();
+
+                const size_t render_rows = static_cast<size_t>(display_rows);
+                const size_t n = std::min(render_rows, cur_rows.size());
+                for (size_t r = 0; r < n; ++r) {
+                    const std::string_view cur = cur_rows[r];
+                    const std::string& prev = prev_rows[r];
+                    const bool changed =
+                        (cur.size() != prev.size()) ||
+                        (cur.size() > 0 && std::memcmp(cur.data(), prev.data(), cur.size()) != 0);
+
+                    if (changed) {
+                        appendCursorMove(patch, static_cast<int>(r + 1));
+                        patch.append(cur.data(), cur.size());
+                        if (cur.size() < prev.size()) {
+                            patch.append("\033[K", 3);
+                        }
+                        prev_rows[r].assign(cur.data(), cur.size());
+                    }
+                }
+
+                for (size_t r = n; r < render_rows; ++r) {
+                    if (!prev_rows[r].empty()) {
+                        appendCursorMove(patch, static_cast<int>(r + 1));
+                        patch.append("\033[K", 3);
+                        prev_rows[r].clear();
+                    }
+                }
+
+                if (!patch.empty()) {
+                    write(STDOUT_FILENO, patch.c_str(), patch.size());
+                }
             } else {
                 fmt::print(fp, "[WARNING] empty frame, queue_depth = {}\n", queue_depth_after_pop);
             }
