@@ -21,13 +21,13 @@
 
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
-constexpr float sleep_value = -1;//待機時間
-const std::string FILENAME = "bell.mp4"; // 動画ファイル名
+constexpr float sleep_value = 2;//待機時間
+const std::string FILENAME = "bad_apple_120.mp4"; // 動画ファイル名
 constexpr float FONT_CORRECTION = 2.76f; // フォントアスペクト比補正
 constexpr int MAX_RENDER_WIDTH = 2000;   // 描画幅上限（ターミナル描画速度の限界）
-constexpr size_t FRAME_RING_CAPACITY = 1024; // SPSCリングバッファ容量
+constexpr size_t FRAME_RING_CAPACITY = 20000; // SPSCリングバッファ容量
 
-const bool is_debug = false; // デバッグモード
+const bool is_debug = true; // デバッグモード
 
 class SpscFrameRing {
 public:
@@ -341,8 +341,11 @@ int main() {
     const int term_h = getTermHeight() - 1;  // 最終行を使わない（スクロール防止）
     const int term_w = getTermWidth();
     
+    // 右端の描画破綻を避けるため、1カラム分の安全マージンを確保
+    // （一部端末で最終カラム描画時にアーティファクトが出ることがある）
+    const int safe_term_w = std::max(1, term_w - 1);
     // 描画幅上限を適用（ターミナル幅との小さい方）
-    const int effective_w = std::min(term_w, MAX_RENDER_WIDTH);
+    const int effective_w = std::min(safe_term_w, MAX_RENDER_WIDTH);
     
     // 動画のアスペクト比からターミナルにフィットするサイズを決定
     const float video_aspect = static_cast<float>(vidObj.get(cv::CAP_PROP_FRAME_WIDTH))
@@ -489,9 +492,8 @@ int main() {
                     if (changed) {
                         appendCursorMove(patch, static_cast<int>(r + 1));
                         patch.append(cur.data(), cur.size());
-                        if (cur.size() < prev.size()) {
-                            patch.append("\033[K", 3);
-                        }
+                        // 行末の残像・背景色リーク防止のため毎回EOLまで消去
+                        patch.append("\033[0m\033[K", 7);
                         prev_rows[r].assign(cur.data(), cur.size());
                     }
                 }
@@ -521,7 +523,7 @@ int main() {
                 }
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             } else {
-                fmt::print(fp, "[WARNING] display_frame = {}, processing_time = {:.6f}, sleep_time = {:.6f}, queue_depth = {}\n", displayed, processing_time.count(), sleep_time, queue_depth_after_pop);
+                fmt::print(fp, "[WARNING] display_frame = {}, processing_time = {:.6f}, sleep_time = {:.6f}, queue_depth = {}, frame_size = {}\n", displayed, processing_time.count(), sleep_time, queue_depth_after_pop, frame.size());
             }
         }
     });

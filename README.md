@@ -1,36 +1,42 @@
 # BadApple
 
-ターミナル上で動画をカラーASCII風（ハーフブロック描画）で再生するC++プロジェクトです。  
-OpenCVで動画フレームを処理し、SFMLで音声を再生します。
-color-v2の後継に当たる開発中のものです。
+ターミナル上で動画をカラー表示する C++ プロジェクトです。  
+描画は UTF-8 のハーフブロック（`▀`）を使い、1 文字セルで上下 2 ピクセルを表現します。
+
+- 動画フレーム処理: `OpenCV`
+- 音声再生: `SFML (audio)`
+- 文字列組み立て/出力最適化: `fmt`, SIMD, OpenMP
 
 ## 動作環境
 
-- Linux（Ubuntu想定）
-- CMake + Ninja
+- Linux（Ubuntu 想定）
+- CMake 3.18+
+- Ninja
 - g++
 
-## 必要パッケージ
+## 依存パッケージ
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake ninja-build libopencv-dev ffmpeg libsfml-dev libfmt-dev
 ```
 
-## 使い方
+## クイックスタート
 
-1. プロジェクト直下に再生したい動画ファイルを配置
-2. `main.cpp` の `FILENAME` を動画名に合わせて変更
-3. ビルド
-4. 実行
+1. プロジェクト直下に再生したい動画ファイル（例: `sen.mp4`）を置く
+2. [main.cpp](main.cpp) の `FILENAME` を動画名に合わせる
+3. ビルドする
+4. 実行する
 
 ### ビルド
+
+Release（デフォルト）:
 
 ```bash
 sh cmake.sh
 ```
 
-Debugビルドする場合:
+Debug:
 
 ```bash
 sh cmake.sh Debug
@@ -42,27 +48,50 @@ sh cmake.sh Debug
 sh run.sh
 ```
 
-### ログ確認（任意）
-
-`output.txt` を監視するには:
+### ログ監視（任意）
 
 ```bash
 sh log.sh
 ```
 
-## 設定項目（`main.cpp`）
+## 設定項目
 
-```cpp
-constexpr float volume = 30.0f;         // 音量
-constexpr float speed = 1.0f;           // 再生速度
-constexpr float sleep_value = -1;       // 事前待機制御（-1で無効）
-const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
-constexpr float FONT_CORRECTION = 2.76f; // フォント縦横比補正
-constexpr int MAX_RENDER_WIDTH = 2000;   // 描画幅上限
-```
+主な調整パラメータは [main.cpp](main.cpp#L20-L29) です。
 
-## 補足
+- `volume`: 音量
+- `speed`: 再生速度倍率
+- `sleep_value`: 事前待機制御（現状はほぼ未使用）
+- `FILENAME`: 再生する動画ファイル名
+- `FONT_CORRECTION`: 端末フォント縦横比補正
+- `MAX_RENDER_WIDTH`: 描画幅の上限
+- `FRAME_RING_CAPACITY`: フレームリングバッファ容量
+- `is_debug`: デバッグログ制御
 
-- 実行時に `ffmpeg` で音声を `output.wav` に抽出します。
-- ターミナルサイズに合わせて描画解像度を自動調整します。
-- 実行中はカーソル非表示・折り返し無効化を行い、終了時に復元します。
+## 仕組み（概要）
+
+1. `ffmpeg` で動画から音声を `output.wav` に抽出
+2. OpenCV で動画を読み込み、端末サイズに合わせてリサイズ
+3. 各フレームをハーフブロック+24bit ANSI カラー列に変換
+4. SPSC リングバッファで生産者/消費者スレッド間を受け渡し
+5. 音声再生と同期しながらターミナルへ描画
+
+## 生成物
+
+- `build/Bad-Apple`: 実行ファイル
+- `output.wav`: 抽出された音声
+- `output.txt`: 実行ログ
+
+## トラブルシューティング
+
+- `Error: Could not open file` が出る
+	- `FILENAME` と動画ファイルの配置場所を確認
+- 音が出ない
+	- `ffmpeg` と `libsfml-dev` の導入状態を確認
+- 文字が崩れる / 重い
+	- ターミナルを広げる、`MAX_RENDER_WIDTH` を下げる
+- ビルド失敗
+	- [cmake.sh](cmake.sh) 実行後に `build/build.log` を確認
+
+## 詳細ドキュメント
+
+- 実装の詳細説明: [docs/DETAILS.md](docs/DETAILS.md)
