@@ -65,6 +65,7 @@ else()
     target_compile_options(Bad-Apple PRIVATE 
         -O3                 
         -march=native      
+        -mavx2
         -ffast-math       
         -fomit-frame-pointer
         -flto              

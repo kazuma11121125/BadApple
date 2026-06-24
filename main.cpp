@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <iostream>
 #include <algorithm>
 #include <array>
@@ -18,29 +19,36 @@
 #include <fmt/core.h>
 #include <sys/ioctl.h>
 #include <sys/uio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 constexpr float volume = 30.0f;
 constexpr float speed = 1.0f;
-constexpr float sleep_value = 2;//待機時間
-const std::string FILENAME = "bad_apple_120.mp4"; // 動画ファイル名
+constexpr float sleep_value = -1;//待機時間
+const std::string FILENAME = "tadakimi.mp4"; // 動画ファイル名
+const std::string FILENAME_MJPEG = "tadakimi_mjpeg.avi"; // MJPEGキャッシュファイル名
 constexpr float FONT_CORRECTION = 2.76f; // フォントアスペクト比補正
-constexpr int MAX_RENDER_WIDTH = 2000;   // 描画幅上限（ターミナル描画速度の限界）
-constexpr size_t FRAME_RING_CAPACITY = 20000; // SPSCリングバッファ容量
+constexpr int MAX_RENDER_WIDTH = 4000;   // 描画幅上限（ターミナル描画速度の限界）
+constexpr size_t FRAME_RING_CAPACITY = 512; // SPSCリングバッファ容量
 
 const bool is_debug = true; // デバッグモード
 
+// ─── SPSC リングバッファ（vector<string> 行配列を直接転送、連結なし） ────────
 class SpscFrameRing {
 public:
     explicit SpscFrameRing(size_t capacity)
         : buf_(capacity), cap_(capacity) {}
 
-    void reserve_all(size_t bytes) {
-        for (auto& s : buf_) {
-            s.reserve(bytes);
+    // 各スロットの各行バッファを事前確保
+    void reserve_all(size_t row_count, size_t bytes_per_row) {
+        for (auto& rows : buf_) {
+            rows.resize(row_count);
+            for (auto& s : rows) s.reserve(bytes_per_row);
         }
     }
 
-    bool try_push(std::string& item) {
+    // item の中身をリングの空きスロットと swap（コピーなし）
+    bool try_push(std::vector<std::string>& item) {
         const size_t head = head_.load(std::memory_order_relaxed);
         const size_t next = inc(head);
         if (next == tail_.load(std::memory_order_acquire)) {
@@ -51,7 +59,8 @@ public:
         return true;
     }
 
-    bool try_pop(std::string& out) {
+    // out とリングの先頭スロットを swap（コピーなし）
+    bool try_pop(std::vector<std::string>& out) {
         const size_t tail = tail_.load(std::memory_order_relaxed);
         if (tail == head_.load(std::memory_order_acquire)) {
             return false; // empty
@@ -74,7 +83,7 @@ private:
         return idx;
     }
 
-    std::vector<std::string> buf_;
+    std::vector<std::vector<std::string>> buf_;
     const size_t cap_;
     alignas(64) std::atomic<size_t> head_{0};
     alignas(64) std::atomic<size_t> tail_{0};
@@ -93,11 +102,8 @@ int getTermWidth() {
     return w.ws_col > 0 ? w.ws_col : 200;
 }
 
-inline cv::Mat resize(const cv::Mat& image, int new_height, int new_width) {
-    cv::Mat resized_image;
-    resized_image.create(new_height, new_width, image.type());
-    cv::resize(image, resized_image, resized_image.size(), 0, 0, cv::INTER_LINEAR);
-    return resized_image;
+inline void resize(const cv::Mat& src, cv::Mat& dst, int new_height, int new_width) {
+    cv::resize(src, dst, cv::Size(new_width, new_height), 0, 0, cv::INTER_NEAREST);
 }
 
 inline uint8_t quantize_floor5_scalar(uint8_t x) {
@@ -159,66 +165,83 @@ struct IntToStr {
 static constexpr IntToStr INT_STR{};
 
 inline void appendCursorMove(std::string& out, int row1based) {
-    out.append("\033[", 2);
+    char buf[32];
+    char* ptr = buf;
+    std::memcpy(ptr, "\033[", 2);
+    ptr += 2;
     if (row1based >= 0 && row1based <= 255) {
-        out.append(INT_STR.data[row1based], INT_STR.len[row1based]);
+        std::memcpy(ptr, INT_STR.data[row1based], INT_STR.len[row1based]);
+        ptr += INT_STR.len[row1based];
     } else {
-        out.append(std::to_string(row1based));
+        std::string s = std::to_string(row1based);
+        std::memcpy(ptr, s.data(), s.size());
+        ptr += s.size();
     }
-    out.append(";1H", 3);
+    std::memcpy(ptr, ";1H", 3);
+    ptr += 3;
+    out.append(buf, ptr - buf);
 }
 
-inline void splitFrameRows(const std::string& frame, std::vector<std::string_view>& rows) {
-    rows.clear();
-    if (frame.empty()) return;
-
-    size_t start = 0;
-    size_t end = frame.size();
-
-    if (frame.size() >= 3 && frame.compare(0, 3, "\033[H") == 0) {
-        start = 3;
-    }
-    if (end >= 4 && frame.compare(end - 4, 4, "\033[0m") == 0) {
-        end -= 4;
-    }
-    if (start >= end) return;
-
-    size_t line_start = start;
-    for (size_t i = start; i < end; ++i) {
-        if (frame[i] == '\n') {
-            rows.emplace_back(frame.data() + line_start, i - line_start);
-            line_start = i + 1;
-        }
-    }
-    if (line_start <= end) {
-        rows.emplace_back(frame.data() + line_start, end - line_start);
-    }
-}
-
-// エスケープシーケンスを高速に組み立てる（snprintf不使用）
+// エスケープシーケンスを高速に組み立てる（snprintf不使用、スタックバッファによる最適化）
 inline void appendFgBg(std::string& line, int fg_r, int fg_g, int fg_b, int bg_r, int bg_g, int bg_b) {
-    line.append("\033[38;2;", 7);
-    line.append(INT_STR.data[fg_r], INT_STR.len[fg_r]); line.push_back(';');
-    line.append(INT_STR.data[fg_g], INT_STR.len[fg_g]); line.push_back(';');
-    line.append(INT_STR.data[fg_b], INT_STR.len[fg_b]);
-    line.append(";48;2;", 6);
-    line.append(INT_STR.data[bg_r], INT_STR.len[bg_r]); line.push_back(';');
-    line.append(INT_STR.data[bg_g], INT_STR.len[bg_g]); line.push_back(';');
-    line.append(INT_STR.data[bg_b], INT_STR.len[bg_b]); line.push_back('m');
+    char buf[64];
+    char* ptr = buf;
+    std::memcpy(ptr, "\033[38;2;", 7);
+    ptr += 7;
+    std::memcpy(ptr, INT_STR.data[fg_r], INT_STR.len[fg_r]);
+    ptr += INT_STR.len[fg_r];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[fg_g], INT_STR.len[fg_g]);
+    ptr += INT_STR.len[fg_g];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[fg_b], INT_STR.len[fg_b]);
+    ptr += INT_STR.len[fg_b];
+    std::memcpy(ptr, ";48;2;", 6);
+    ptr += 6;
+    std::memcpy(ptr, INT_STR.data[bg_r], INT_STR.len[bg_r]);
+    ptr += INT_STR.len[bg_r];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[bg_g], INT_STR.len[bg_g]);
+    ptr += INT_STR.len[bg_g];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[bg_b], INT_STR.len[bg_b]);
+    ptr += INT_STR.len[bg_b];
+    *ptr++ = 'm';
+    line.append(buf, ptr - buf);
 }
 
 inline void appendFg(std::string& line, int r, int g, int b) {
-    line.append("\033[38;2;", 7);
-    line.append(INT_STR.data[r], INT_STR.len[r]); line.push_back(';');
-    line.append(INT_STR.data[g], INT_STR.len[g]); line.push_back(';');
-    line.append(INT_STR.data[b], INT_STR.len[b]); line.push_back('m');
+    char buf[32];
+    char* ptr = buf;
+    std::memcpy(ptr, "\033[38;2;", 7);
+    ptr += 7;
+    std::memcpy(ptr, INT_STR.data[r], INT_STR.len[r]);
+    ptr += INT_STR.len[r];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[g], INT_STR.len[g]);
+    ptr += INT_STR.len[g];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[b], INT_STR.len[b]);
+    ptr += INT_STR.len[b];
+    *ptr++ = 'm';
+    line.append(buf, ptr - buf);
 }
 
 inline void appendBg(std::string& line, int r, int g, int b) {
-    line.append("\033[48;2;", 7);
-    line.append(INT_STR.data[r], INT_STR.len[r]); line.push_back(';');
-    line.append(INT_STR.data[g], INT_STR.len[g]); line.push_back(';');
-    line.append(INT_STR.data[b], INT_STR.len[b]); line.push_back('m');
+    char buf[32];
+    char* ptr = buf;
+    std::memcpy(ptr, "\033[48;2;", 7);
+    ptr += 7;
+    std::memcpy(ptr, INT_STR.data[r], INT_STR.len[r]);
+    ptr += INT_STR.len[r];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[g], INT_STR.len[g]);
+    ptr += INT_STR.len[g];
+    *ptr++ = ';';
+    std::memcpy(ptr, INT_STR.data[b], INT_STR.len[b]);
+    ptr += INT_STR.len[b];
+    *ptr++ = 'm';
+    line.append(buf, ptr - buf);
 }
 
 // ハーフブロック方式: 1セルで縦2ピクセルを表現
@@ -231,105 +254,117 @@ void processHalfBlockRow(const cv::Mat& image, int out_row, int total_out_rows,
     const int src_row_bot = src_row_top + 1;
     const bool has_bot = src_row_bot < image.rows;
     
-    const cv::Vec3b* top_ptr = image.ptr<cv::Vec3b>(src_row_top);
-    const cv::Vec3b* bot_ptr = has_bot ? image.ptr<cv::Vec3b>(src_row_bot) : nullptr;
+    const uint8_t* top_raw = image.ptr<uint8_t>(src_row_top);
+    const uint8_t* bot_raw = has_bot ? image.ptr<uint8_t>(src_row_bot) : nullptr;
 
-    const uint8_t* top_raw = reinterpret_cast<const uint8_t*>(top_ptr);
-    const uint8_t* bot_raw = has_bot ? reinterpret_cast<const uint8_t*>(bot_ptr) : nullptr;
-    const size_t row_bytes = static_cast<size_t>(image.cols) * 3;
-
-    thread_local std::vector<uint8_t> top_q;
-    thread_local std::vector<uint8_t> bot_q;
-    top_q.resize(row_bytes);
-    quantize_row_floor5_simd(top_raw, top_q.data(), row_bytes);
-
-    if (has_bot) {
-        bot_q.resize(row_bytes);
-        quantize_row_floor5_simd(bot_raw, bot_q.data(), row_bytes);
+    std::string& line = output[out_row];
+    line.clear();
+    const size_t desired_capacity = static_cast<size_t>(image.cols) * 20;
+    if (line.capacity() < desired_capacity) {
+        line.reserve(desired_capacity);
     }
     
-    std::string line;
-    line.reserve(static_cast<size_t>(image.cols) * 20);
-    
-    int prev_fg_r = -1, prev_fg_g = -1, prev_fg_b = -1;
-    int prev_bg_r = -1, prev_bg_g = -1, prev_bg_b = -1;
+    uint32_t prev_fg = 0xFFFFFFFF; // 初期値（存在しない色）
+    uint32_t prev_bg = 0xFFFFFFFF;
     
     for (int j = 0; j < image.cols; ++j) {
         const int idx = j * 3;
-        int fg_b = top_q[idx + 0];
-        int fg_g = top_q[idx + 1];
-        int fg_r = top_q[idx + 2];
+        uint32_t fg_b = quantize_floor5_scalar(top_raw[idx + 0]);
+        uint32_t fg_g = quantize_floor5_scalar(top_raw[idx + 1]);
+        uint32_t fg_r = quantize_floor5_scalar(top_raw[idx + 2]);
+        uint32_t fg = (fg_r << 16) | (fg_g << 8) | fg_b;
         
-        int bg_r, bg_g, bg_b;
+        uint32_t bg;
         if (has_bot) {
-            bg_b = bot_q[idx + 0];
-            bg_g = bot_q[idx + 1];
-            bg_r = bot_q[idx + 2];
+            uint32_t bg_b = quantize_floor5_scalar(bot_raw[idx + 0]);
+            uint32_t bg_g = quantize_floor5_scalar(bot_raw[idx + 1]);
+            uint32_t bg_r = quantize_floor5_scalar(bot_raw[idx + 2]);
+            bg = (bg_r << 16) | (bg_g << 8) | bg_b;
         } else {
-            bg_r = 0; bg_g = 0; bg_b = 0;
+            bg = 0;
         }
         
         // 上下同色の場合: スペース+背景色のみ（前景色不要）
-        if (fg_r == bg_r && fg_g == bg_g && fg_b == bg_b) {
-            if (bg_r != prev_bg_r || bg_g != prev_bg_g || bg_b != prev_bg_b) {
-                appendBg(line, bg_r, bg_g, bg_b);
-                prev_bg_r = bg_r; prev_bg_g = bg_g; prev_bg_b = bg_b;
+        if (fg == bg) {
+            if (bg != prev_bg) {
+                appendBg(line, (bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF);
+                prev_bg = bg;
             }
             line.push_back(' ');
-            prev_fg_r = -1; prev_fg_g = -1; prev_fg_b = -1;
+            prev_fg = 0xFFFFFFFF;
             continue;
         }
         
-        bool fg_changed = (fg_r != prev_fg_r || fg_g != prev_fg_g || fg_b != prev_fg_b);
-        bool bg_changed = (bg_r != prev_bg_r || bg_g != prev_bg_g || bg_b != prev_bg_b);
+        bool fg_changed = (fg != prev_fg);
+        bool bg_changed = (bg != prev_bg);
         
         if (fg_changed && bg_changed) {
-            appendFgBg(line, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b);
-            prev_fg_r = fg_r; prev_fg_g = fg_g; prev_fg_b = fg_b;
-            prev_bg_r = bg_r; prev_bg_g = bg_g; prev_bg_b = bg_b;
+            appendFgBg(line, fg_r, fg_g, fg_b, (bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF);
+            prev_fg = fg;
+            prev_bg = bg;
         } else if (fg_changed) {
             appendFg(line, fg_r, fg_g, fg_b);
-            prev_fg_r = fg_r; prev_fg_g = fg_g; prev_fg_b = fg_b;
+            prev_fg = fg;
         } else if (bg_changed) {
-            appendBg(line, bg_r, bg_g, bg_b);
-            prev_bg_r = bg_r; prev_bg_g = bg_g; prev_bg_b = bg_b;
+            appendBg(line, (bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF);
+            prev_bg = bg;
         }
         
         line.append(HALF_BLOCK, 3);
     }
-    
-    if (out_row < total_out_rows - 1) {
-        line.push_back('\n');
-    }
-    output[out_row] = std::move(line);
+    // 最終行以外は改行不要（display_thread で行単位に直接処理するため）
+    (void)total_out_rows;
 }
 
-void modify(const cv::Mat& image, std::string& result) {
+// modify: 各行を output[] に直接書き込む。連結は行わない（ゼロコピー渡し）
+void modify(const cv::Mat& image, std::vector<std::string>& output) {
     const int out_rows = (image.rows + 1) / 2;
-    std::vector<std::string> output(out_rows);
-    
-    #pragma omp parallel for
-    for (int i = 0; i < out_rows; ++i) {
-        processHalfBlockRow(std::cref(image), i, out_rows, std::ref(output));
+    if (static_cast<int>(output.size()) != out_rows) {
+        output.resize(out_rows);
     }
     
-    size_t total = 3; // \033[H
-    for (const auto& line : output) total += line.size();
-    total += 4; // \033[0m
-
-    result.clear();
-    result.reserve(total);
-    result.append("\033[H");
-    for (const auto& line : output) result.append(line);
-    result.append("\033[0m");
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < out_rows; ++i) {
+        processHalfBlockRow(image, i, out_rows, output);
+    }
 }
 
 int main() {
-    std::string commands = fmt::format("ffmpeg -y -i '{}' -vn output.wav", FILENAME);
-    std::thread t([&commands](){
-        system(commands.c_str());
-    });
-    cv::VideoCapture vidObj(FILENAME);
+    // stdoutがパイプの場合のみバッファ容量を増やす (TTY接続時はエラーを無視)
+    fcntl(STDOUT_FILENO, F_SETPIPE_SZ, 1048576);
+
+    // WAV抽出 と MJPEGトランスコードを並列実行
+    std::thread t_wav;
+    std::thread t_mjpeg;
+
+    if (access("output.wav", F_OK) != 0) {
+        std::string cmd = fmt::format("ffmpeg -y -i '{}' -vn output.wav -loglevel quiet", FILENAME);
+        t_wav = std::thread([cmd]() { system(cmd.c_str()); });
+        fmt::print(stderr, "[INFO] WAV extraction started...\n");
+    }
+
+    if (access(FILENAME_MJPEG.c_str(), F_OK) != 0) {
+        // -q:v 3 = 高品質MJPEG（1が最高、31が最低）
+        std::string cmd = fmt::format(
+            "ffmpeg -y -i '{}' -vcodec mjpeg -q:v 3 -an '{}' -loglevel quiet",
+            FILENAME, FILENAME_MJPEG);
+        t_mjpeg = std::thread([cmd]() { system(cmd.c_str()); });
+        fmt::print(stderr, "[INFO] MJPEG transcoding started (this may take a moment)...\n");
+    }
+
+    // 両方の変換が完了するまで待機
+    if (t_wav.joinable())   t_wav.join();
+    if (t_mjpeg.joinable()) {
+        t_mjpeg.join();
+        fmt::print(stderr, "[INFO] MJPEG transcoding done.\n");
+    }
+
+    // MJPEGファイルが存在する場合はそちらを使用（H264より高速デコード）
+    const std::string play_file = (access(FILENAME_MJPEG.c_str(), F_OK) == 0)
+                                  ? FILENAME_MJPEG : FILENAME;
+    fmt::print(stderr, "[INFO] Using: {}\n", play_file);
+
+    cv::VideoCapture vidObj(play_file);
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(nullptr);
     if (!vidObj.isOpened()) {
@@ -342,7 +377,6 @@ int main() {
     const int term_w = getTermWidth();
     
     // 右端の描画破綻を避けるため、1カラム分の安全マージンを確保
-    // （一部端末で最終カラム描画時にアーティファクトが出ることがある）
     const int safe_term_w = std::max(1, term_w - 1);
     // 描画幅上限を適用（ターミナル幅との小さい方）
     const int effective_w = std::min(safe_term_w, MAX_RENDER_WIDTH);
@@ -365,9 +399,12 @@ int main() {
     fmt::print(stderr, "Terminal: {}x{}, Render: {}x{} (display: {}x{})\n",
                term_w, term_h + 1, target_w, target_h, target_w, (target_h + 1) / 2);
     
+    const int display_rows_count = (target_h + 1) / 2;
+    const size_t bytes_per_row = static_cast<size_t>(target_w) * 20; // 最大見積もり
+
     SpscFrameRing frame_ring(FRAME_RING_CAPACITY);
-    const size_t estimated_frame_bytes = static_cast<size_t>(target_w) * static_cast<size_t>((target_h + 1) / 2) * 14 + 16;
-    frame_ring.reserve_all(estimated_frame_bytes);
+    frame_ring.reserve_all(static_cast<size_t>(display_rows_count), bytes_per_row);
+
     std::atomic<bool> producer_done{false};
     int frame_count = static_cast<int>(vidObj.get(cv::CAP_PROP_FRAME_COUNT));
     cv::Mat image;
@@ -376,33 +413,37 @@ int main() {
     float fps = vidObj.get(cv::CAP_PROP_FPS) * speed;
     
     fmt::print(fp, "[CONFIG] term={}x{} render={}x{} display_rows={} fps={:.1f}\n",
-               term_w, term_h + 1, target_w, target_h, (target_h + 1) / 2, fps);
+               term_w, term_h + 1, target_w, target_h, display_rows_count, fps);
     
     std::thread cv_thred([&frame_count, &frame_ring, &vidObj, &image, &producer_done, &fp, fps, target_h, target_w](){
         const double sleep = 1.0 / (fps * 1.25);
         const int pass_time_count = 100;
-        std::string frame;
-        frame.reserve(static_cast<size_t>(target_w) * static_cast<size_t>((target_h + 1) / 2) * 14 + 16);
-        for (size_t i = 0; i < frame_count; ++i) {
+        // output はリングのスロットと swap するので、ここで行バッファを持つ
+        std::vector<std::string> output;
+        cv::Mat resized_image;
+        for (size_t i = 0; i < static_cast<size_t>(frame_count); ++i) {
             auto start_time = std::chrono::high_resolution_clock::now();
             if (!vidObj.read(image)) break;
-            cv::Mat resized_image = resize(image, target_h, target_w);
-            modify(resized_image, frame);
-            if (!frame.empty()) {
-                while (!frame_ring.try_push(frame)) {
+            resize(image, resized_image, target_h, target_w);
+            // 行ベクタに直接書き込む（連結なし）
+            modify(resized_image, output);
+            if (!output.empty()) {
+                while (!frame_ring.try_push(output)) {
                     std::this_thread::sleep_for(std::chrono::microseconds(200));
                 }
+                // try_push後、output はリングから戻ってきた空きスロットになる
+                // （行バッファは再利用される）
             }
             auto end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> elapsed_time = end_time - start_time;
             double sleep_time = sleep - elapsed_time.count();
-            if (sleep_time > 0 && i > pass_time_count) {
+            if (sleep_time > 0 && i > static_cast<size_t>(pass_time_count)) {
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
                 if (is_debug){
                     fmt::print(fp, "[INFO] process_frame = {}, elapsed_time = {:.6f}, sleep_time = {:.6f}\n", i, elapsed_time.count(), sleep_time);
                 }
             } else {
-                if(i > pass_time_count){
+                if(i > static_cast<size_t>(pass_time_count)){
                     fmt::print(fp, "[WARNING] process_frame = {}, elapsed_time = {:.6f}, sleep_time = {:.6f}\n", i, elapsed_time.count(), sleep_time);
                 }
             }
@@ -414,16 +455,16 @@ int main() {
         }
     });
 
-    t.join();
+    // wav/mjpeg スレッドは起動直後に join 済みなので不要
     if (sleep_value > 0) {
-        const size_t prebuffer = static_cast<size_t>(frame_count / sleep_value);
+        const size_t prebuffer = std::min<size_t>(120, static_cast<size_t>(frame_count / sleep_value));
         while (frame_ring.size_approx() < prebuffer && !producer_done.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
     // カーソル非表示 & 画面クリア & スクロール防止
     system("clear");
-    int display_rows = (target_h + 1) / 2;
+    int display_rows = display_rows_count;
     printf("\033[?25l");              // カーソル非表示
     printf("\033[1;%dr", display_rows); // スクロール領域を表示行数に制限
     printf("\033[?7l");               // 自動折り返し無効
@@ -438,17 +479,24 @@ int main() {
     auto start_time = std::chrono::high_resolution_clock::now();
     music.play();
     
-    std::thread display_thread([&frame_ring, &producer_done, fps, frame_count, display_rows, estimated_frame_bytes, &fp, &start_time]() {
+    std::thread display_thread([&frame_ring, &producer_done, fps, frame_count, display_rows, &fp, &start_time]() {
         const int max_frame = frame_count - 2;
         double sleep = 1.0 / fps;
         size_t displayed = 0;
-        std::string frame;
-        std::string dropped;
+
+        // ring から受け取る行ベクタ（swap で使い回し）
+        std::vector<std::string> cur_frame;
+        std::vector<std::string> dropped_frame;
+
+        // 前フレームの行内容（差分検出用）
         std::vector<std::string> prev_rows(static_cast<size_t>(display_rows));
-        std::vector<std::string_view> cur_rows;
-        cur_rows.reserve(static_cast<size_t>(display_rows));
+
         std::string patch;
-        patch.reserve(estimated_frame_bytes / 2);
+        patch.reserve(static_cast<size_t>(display_rows) * 20 * 1653); // 概算
+
+        static const char SYNC_BEGIN[] = "\033[?2026h";
+        static const char SYNC_END[]   = "\033[?2026l";
+
         while (displayed < static_cast<size_t>(max_frame)) {
             auto frame_start_time = std::chrono::high_resolution_clock::now();
             auto current_time = std::chrono::high_resolution_clock::now();
@@ -456,35 +504,38 @@ int main() {
             const size_t expected_frame_index = static_cast<size_t>(std::max(0, static_cast<int>(elapsed_time.count() * fps)));
 
             size_t queue_depth_after_pop = 0;
+            // 遅延フレームをスキップ
             while (displayed < expected_frame_index && frame_ring.size_approx() > 1) {
-                if (!frame_ring.try_pop(dropped)) {
+                if (!frame_ring.try_pop(dropped_frame)) {
                     break;
                 }
                 ++displayed;
             }
 
-            while (!frame_ring.try_pop(frame)) {
+            // 次フレームを取得
+            while (!frame_ring.try_pop(cur_frame)) {
                 if (producer_done.load(std::memory_order_acquire)) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::microseconds(200));
             }
 
-            if (frame.empty() && producer_done.load(std::memory_order_acquire)) {
+            if (cur_frame.empty() && producer_done.load(std::memory_order_acquire)) {
                 break;
             }
 
             queue_depth_after_pop = frame_ring.size_approx();
 
-            if (!frame.empty()) {
-                splitFrameRows(frame, cur_rows);
+            if (!cur_frame.empty()) {
                 patch.clear();
 
                 const size_t render_rows = static_cast<size_t>(display_rows);
-                const size_t n = std::min(render_rows, cur_rows.size());
+                const size_t n = std::min(render_rows, cur_frame.size());
+
+                // 行ベクタを直接使用（splitFrameRows不要）
                 for (size_t r = 0; r < n; ++r) {
-                    const std::string_view cur = cur_rows[r];
-                    const std::string& prev = prev_rows[r];
+                    const std::string& cur = cur_frame[r];
+                    std::string& prev = prev_rows[r];
                     const bool changed =
                         (cur.size() != prev.size()) ||
                         (cur.size() > 0 && std::memcmp(cur.data(), prev.data(), cur.size()) != 0);
@@ -492,9 +543,11 @@ int main() {
                     if (changed) {
                         appendCursorMove(patch, static_cast<int>(r + 1));
                         patch.append(cur.data(), cur.size());
-                        // 行末の残像・背景色リーク防止のため毎回EOLまで消去
-                        patch.append("\033[0m\033[K", 7);
-                        prev_rows[r].assign(cur.data(), cur.size());
+                        // 行の長さが縮んだ場合のみ EOL まで消去
+                        if (cur.size() < prev.size()) {
+                            patch.append("\033[0m\033[K", 7);
+                        }
+                        prev = cur; // string の代入（行サイズは安定しているので再確保は稀）
                     }
                 }
 
@@ -507,7 +560,15 @@ int main() {
                 }
 
                 if (!patch.empty()) {
-                    write(STDOUT_FILENO, patch.c_str(), patch.size());
+                    // writev でゼロコピー送信
+                    struct iovec iov[3];
+                    iov[0].iov_base = const_cast<char*>(SYNC_BEGIN);
+                    iov[0].iov_len  = 8;
+                    iov[1].iov_base = const_cast<char*>(patch.c_str());
+                    iov[1].iov_len  = patch.size();
+                    iov[2].iov_base = const_cast<char*>(SYNC_END);
+                    iov[2].iov_len  = 8;
+                    writev(STDOUT_FILENO, iov, 3);
                 }
             } else {
                 fmt::print(fp, "[WARNING] empty frame, queue_depth = {}\n", queue_depth_after_pop);
@@ -523,7 +584,7 @@ int main() {
                 }
                 std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
             } else {
-                fmt::print(fp, "[WARNING] display_frame = {}, processing_time = {:.6f}, sleep_time = {:.6f}, queue_depth = {}, frame_size = {}\n", displayed, processing_time.count(), sleep_time, queue_depth_after_pop, frame.size());
+                fmt::print(fp, "[WARNING] display_frame = {}, processing_time = {:.6f}, sleep_time = {:.6f}, queue_depth = {}\n", displayed, processing_time.count(), sleep_time, queue_depth_after_pop);
             }
         }
     });
