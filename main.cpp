@@ -247,6 +247,17 @@ int main() {
         }
     }
 
+    // viewer (speed_terminal --shared) が接続してくるまで音声再生を開始しない。
+    // これをしないと viewer 起動が遅れた分だけ頭出しがズレる。
+    // この待機中も decode スレッドはリングバッファへフレームを溜め込み続けるので無駄がない。
+    if (!header->is_viewer_active.load(std::memory_order_acquire)) {
+        fmt::print(stderr, "[INFO] Waiting for viewer to connect (--shared)...\n");
+        while (!header->is_viewer_active.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        fmt::print(stderr, "[INFO] Viewer connected. Starting playback.\n");
+    }
+
     sf::Music music;
     if (!music.openFromFile("output.wav")) {
         fmt::print(stderr, "Error loading audio file\n");
